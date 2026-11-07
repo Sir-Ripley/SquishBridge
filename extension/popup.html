@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Squish Bridge</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+<main>
+  <h1>Squish Bridge <span id="version" class="version"></span></h1>
+  <p id="status" class="status">Loading…</p>
+
+  <section aria-label="Session">
+    <h2>Session</h2>
+    <div class="row">
+      <button id="useCurrentTab" type="button">Share this tab</button>
+      <button id="start" type="button">Start</button>
+      <button id="stop" type="button" class="danger">STOP</button>
+    </div>
+    <p id="sessionInfo" class="muted">No shared tab selected.</p>
+  </section>
+
+  <section aria-label="Pairing">
+    <h2>Pairing</h2>
+    <p class="muted">Pairing arrives in M1. The extension is not connected yet.</p>
+    <div class="row">
+      <button id="pair" type="button" disabled>Pair (M1)</button>
+      <button id="unpair" type="button" disabled>Unpair (M1)</button>
+    </div>
+  </section>
+
+  <section aria-label="Allowlist">
+    <h2>Allowlist</h2>
+    <div class="row">
+      <input id="newOrigin" type="text" placeholder="example.com" aria-label="Add origin" />
+      <button id="addOrigin" type="button">Add</button>
+    </div>
+    <ul id="allowlist"></ul>
+  </section>
+
+  <section aria-label="Audit log">
+    <h2>Audit log</h2>
+    <div class="row">
+      <button id="refreshAudit" type="button">Refresh</button>
+      <button id="clearAudit" type="button">Clear</button>
+    </div>
+    <ol id="audit" class="audit"></ol>
+  </section>
+
+  <p id="error" class="error" role="alert"></p>
+</main>
+<script src="lib/safety.js"></script>
+<script src="lib/audit.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

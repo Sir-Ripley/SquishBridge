@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: design phase.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); no code yet. First build milestone (M0 scaffold) is next. Everything below describes the design as specified, not a finished product.
+> **Status: M0 scaffold landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); the extension skeleton and bridge skeleton from milestone M0 are in the tree. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M1 pairing.
 
 ## Why
 
@@ -28,7 +28,7 @@ This is the heart of the project, not a feature list:
 - **Allowlist enforced in the extension.** Only origins you approve can be driven; a built-in denylist (banking, password managers) always wins.
 - **Everything is logged.** Every command and its outcome lands in an audit log you can open at any time.
 
-## Repository layout (planned)
+## Repository layout
 
 ```
 extension/   the Chrome extension (MV3)
@@ -46,6 +46,20 @@ Chrome extensions aren't compiled like apps — they're a folder of files. Once 
 4. After code changes, click the extension card's reload button
 
 No Chrome Web Store account is needed for personal use.
+
+Bridge server (Node 20+):
+
+```
+cd bridge
+npm test    # unit tests: health endpoint, token helpers
+npm start   # serves http://127.0.0.1:3031 (loopback-only)
+```
+
+Extension logic tests (no Chrome needed):
+
+```
+node --test extension/test/*.test.js
+```
 
 ## Design & roadmap
 

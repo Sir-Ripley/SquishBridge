@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Squish Bridge",
+  "version": "0.1.0",
+  "description": "Pairs your signed-in Chrome to your Muse agent on one tab you designate. Credentials are never read or shared.",
+  "minimum_chrome_version": "120",
+  "permissions": ["debugger", "tabs", "storage", "alarms", "scripting"],
+  "optional_host_permissions": [
+    "https://github.com/*",
+    "https://kaggle.com/*",
+    "https://notebooklm.google.com/*",
+    "https://notebook.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Squish Bridge"
+  },
+  "commands": {
+    "stop-session": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Stop the active control session immediately"
+    }
+  }
+}

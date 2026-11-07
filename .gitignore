@@ -1,0 +1,5 @@
+node_modules/
+bridge/audit.log.jsonl
+*.log
+.DS_Store/
+Thumbs.db/
