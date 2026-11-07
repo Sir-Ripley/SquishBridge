@@ -125,12 +125,145 @@ test("screenshot returns base64; empty captures raise", async () => {
   await assert.rejects(driver(bad, { active: true, tabId: TAB.id }).execute("screenshot", {}), /empty screenshot/);
 });
 
-test("M3 hands and unknown commands fail closed", async () => {
+test("unknown commands fail closed", async () => {
   const chrome = makeChrome({ tab: TAB });
   const d = driver(chrome, { active: true, tabId: TAB.id });
-  await assert.rejects(d.execute("click", { ref: "1" }), /M3-hands/);
-  await assert.rejects(d.execute("wait_for", {}), /M3-hands/);
   await assert.rejects(d.execute("rm_rf", {}), /unknown-command/);
+});
+
+const HANDS_TREE = {
+  nodes: [
+    { role: { value: "button" }, name: { value: "Go" }, backendDOMNodeId: 5 },
+    { role: { value: "textbox" }, name: { value: "Search" }, backendDOMNodeId: 9 },
+  ],
+};
+
+function handsChrome(overrides = {}) {
+  return makeChrome({
+    tab: TAB,
+    methods: {
+      "Accessibility.getFullAXTree": () => HANDS_TREE,
+      "DOM.resolveNode": ({ backendNodeId }) => ({ object: { objectId: "obj-" + backendNodeId } }),
+      "DOM.scrollIntoViewIfNeeded": () => ({}),
+      "DOM.getContentQuads": () => ({ quads: [[0, 0, 100, 0, 100, 40, 0, 40]] }),
+      "DOM.focus": () => ({}),
+      "Input.dispatchMouseEvent": () => ({}),
+      "Input.dispatchKeyEvent": () => ({}),
+      "Input.insertText": () => ({}),
+      "Page.getLayoutMetrics": () => ({ cssVisualViewport: { pageX: 400, pageY: 300 } }),
+      ...overrides,
+    },
+  });
+}
+
+async function handsDriver(chrome) {
+  const d = driver(chrome, { active: true, tabId: TAB.id });
+  await d.execute("dom_snapshot", {}); // builds refs {1: 5, 2: 9}
+  return d;
+}
+
+test("click by ref scrolls, resolves the center, and presses", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("click", { ref: "1" }), { clicked: true });
+  const methods = chrome.calls.map((c) => c[0]);
+  assert.deepEqual(methods.filter((m) => m === "DOM.resolveNode"), ["DOM.resolveNode"]);
+  const pressed = chrome.calls.filter((c) => c[0] === "Input.dispatchMouseEvent");
+  assert.deepEqual(pressed.map((c) => c[1].type), ["mousePressed", "mouseReleased"]);
+  assert.equal(pressed[0][1].x, 50);
+  assert.equal(pressed[0][1].y, 20);
+});
+
+test("click by coordinates skips resolution; bad clicks refuse", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("click", { x: 10, y: 20 }), { clicked: true });
+  assert.ok(!chrome.calls.some((c) => c[0] === "DOM.resolveNode"));
+  await assert.rejects(d.execute("click", { ref: "99" }), /unknown-ref/);
+  await assert.rejects(d.execute("click", {}), /needs \{ ref \} or \{ x, y \}/);
+});
+
+test("click on a stale ref says to re-snapshot, not retry", async () => {
+  const chrome = makeChrome({
+    tab: TAB,
+    methods: {
+      "Accessibility.getFullAXTree": () => HANDS_TREE,
+      "DOM.resolveNode": () => {
+        throw new Error("No node with given id found");
+      },
+    },
+  });
+  // Throw through the callback path like a real CDP error.
+  chrome.debugger.sendCommand = (target, method, params, cb) => {
+    chrome.calls.push([method, params || {}]);
+    setImmediate(() => {
+      if (method === "DOM.resolveNode") {
+        chrome.runtime.lastError = { message: "No node with given id found" };
+        cb();
+        delete chrome.runtime.lastError;
+      } else if (method === "Accessibility.getFullAXTree") {
+        cb(HANDS_TREE);
+      } else {
+        cb({});
+      }
+    });
+  };
+  const d = driver(chrome, { active: true, tabId: TAB.id });
+  await d.execute("dom_snapshot", {});
+  await assert.rejects(d.execute("click", { ref: "1" }), /stale-ref/);
+});
+
+test("type appends, fill selects-all first", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("type", { ref: "2", text: "hi" }), { typed: true });
+  let keys = chrome.calls.filter((c) => c[0] === "Input.dispatchKeyEvent");
+  assert.equal(keys.length, 0);
+  const inserts = chrome.calls.filter((c) => c[0] === "Input.insertText");
+  assert.deepEqual(inserts[0][1], { text: "hi" });
+
+  await d.execute("fill", { ref: "2", text: "bye" });
+  keys = chrome.calls.filter((c) => c[0] === "Input.dispatchKeyEvent");
+  assert.deepEqual(keys.map((c) => c[1].type), ["rawKeyDown", "keyUp"]);
+  assert.equal(keys[0][1].modifiers, 2);
+  await assert.rejects(d.execute("type", { ref: "2" }), /needs \{ ref, text \}/);
+  await assert.rejects(d.execute("type", { text: "x" }), /needs \{ ref, text \}/);
+});
+
+test("press_key handles characters, named keys, and rejects the rest", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("press_key", { key: "Enter" }), { pressed: true });
+  assert.deepEqual(await d.execute("press_key", { key: "a" }), { pressed: true });
+  await assert.rejects(d.execute("press_key", { key: "F13" }), /unknown key/);
+  await assert.rejects(d.execute("press_key", {}), /needs \{ key \}/);
+  const keys = chrome.calls.filter((c) => c[0] === "Input.dispatchKeyEvent");
+  assert.equal(keys[0][1].windowsVirtualKeyCode, 13);
+  assert.equal(keys[2][1].text, "a");
+});
+
+test("scroll defaults to a page-down at viewport center; refs scroll in place", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("scroll", {}), { scrolled: true });
+  let wheels = chrome.calls.filter((c) => c[0] === "Input.dispatchMouseEvent");
+  assert.equal(wheels.length, 1);
+  assert.deepEqual(
+    { x: wheels[0][1].x, y: wheels[0][1].y, deltaY: wheels[0][1].deltaY },
+    { x: 400, y: 300, deltaY: 400 }
+  );
+  await d.execute("scroll", { ref: "1", deltaY: -200 });
+  wheels = chrome.calls.filter((c) => c[0] === "Input.dispatchMouseEvent");
+  assert.deepEqual({ x: wheels[1][1].x, deltaY: wheels[1][1].deltaY }, { x: 50, deltaY: -200 });
+});
+
+test("wait_for finds text and refs, times out loudly, validates args", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("wait_for", { text: "sea" }), { found: true });
+  assert.deepEqual(await d.execute("wait_for", { ref: "2" }), { found: true });
+  await assert.rejects(d.execute("wait_for", {}), /needs \{ ref \} or \{ text \}/);
+  await assert.rejects(d.execute("wait_for", { text: "zzz-no-such-thing", timeoutMs: 1000 }), /wait-timeout/);
 });
 
 test("attach failure surfaces and the session is left unattached", async () => {

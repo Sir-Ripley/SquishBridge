@@ -15,6 +15,28 @@
 const M3_HANDS = new Set(["click", "type", "fill", "press_key", "scroll", "wait_for"]);
 const M2_EYES = new Set(["navigate", "screenshot", "dom_snapshot", "get_state"]);
 
+// windowsVirtualKeyCode for press_key. Single characters bypass this map
+// and travel as keyDown/keyUp with text.
+const SB_KEY_CODES = {
+  Enter: 13,
+  Tab: 9,
+  Escape: 27,
+  Backspace: 8,
+  Delete: 46,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+  Home: 36,
+  End: 35,
+  PageUp: 33,
+  PageDown: 34,
+};
+
+const SB_WAIT_POLL_MS = 500;
+const SB_WAIT_DEFAULT_MS = 10000;
+const SB_WAIT_MAX_MS = 60000;
+
 function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl }) {
   if (!chromeApi || !chromeApi.debugger || !chromeApi.tabs) throw new Error("driver needs chrome.debugger + chrome.tabs");
   for (const [name, fn] of [["getSession", getSession], ["getAllowlist", getAllowlist], ["condense", condense], ["checkUrl", checkUrl]]) {
@@ -84,10 +106,50 @@ function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl 
     return tab;
   }
 
+  // Resolve a snapshot ref to a live objectId. Backend ids go stale on
+  // navigation, so a miss means "take a fresh dom_snapshot", not retry.
+  async function resolveRef(tabId, ref) {
+    const backendNodeId = refs[ref] != null ? refs[ref] : null;
+    if (backendNodeId === null || backendNodeId === undefined) {
+      throw new Error(`refused: unknown-ref ${ref} (take a fresh dom_snapshot)`);
+    }
+    let resolved;
+    try {
+      resolved = await send(tabId, "DOM.resolveNode", { backendNodeId });
+    } catch (err) {
+      throw new Error(`refused: stale-ref ${ref} (take a fresh dom_snapshot)`);
+    }
+    const objectId = resolved && resolved.object && resolved.object.objectId;
+    if (!objectId) throw new Error(`refused: stale-ref ${ref} (take a fresh dom_snapshot)`);
+    return objectId;
+  }
+
+  function quadCenter(quads) {
+    const q = quads && quads[0];
+    if (!Array.isArray(q) || q.length < 8) throw new Error("error: element has no visible box");
+    return {
+      x: (q[0] + q[2] + q[4] + q[6]) / 4,
+      y: (q[1] + q[3] + q[5] + q[7]) / 4,
+    };
+  }
+
+  async function snapshotNow(tabId) {
+    const tree = await send(tabId, "Accessibility.getFullAXTree", {});
+    const condensed = condense(tree && tree.nodes);
+    refs = condensed.refs;
+    const fresh = await chromeApi.tabs.get(tabId).catch(() => null);
+    return {
+      url: (fresh && fresh.url) || "",
+      title: (fresh && fresh.title) || "",
+      nodes: condensed.nodes,
+      truncated: condensed.truncated,
+    };
+  }
+
   async function execute(type, payload) {
-    if (M3_HANDS.has(type)) throw new Error("arrives in M3-hands");
-    if (!M2_EYES.has(type)) throw new Error("unknown-command: " + type);
+    if (!M2_EYES.has(type) && !M3_HANDS.has(type)) throw new Error("unknown-command: " + type);
     const tab = await sharedTab();
+    const args = payload && typeof payload === "object" ? payload : {};
     return exclusive(async () => {
       await ensureAttached(tab.id);
       switch (type) {
@@ -109,16 +171,103 @@ function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl 
           return { pngBase64: shot.data };
         }
         case "dom_snapshot": {
-          const tree = await send(tab.id, "Accessibility.getFullAXTree", {});
-          const condensed = condense(tree && tree.nodes);
-          refs = condensed.refs;
-          const fresh = await chromeApi.tabs.get(tab.id).catch(() => tab);
-          return {
-            url: fresh.url || "",
-            title: fresh.title || "",
-            nodes: condensed.nodes,
-            truncated: condensed.truncated,
-          };
+          return snapshotNow(tab.id);
+        }
+        case "click": {
+          let point;
+          if (args.ref !== undefined) {
+            const objectId = await resolveRef(tab.id, String(args.ref));
+            await send(tab.id, "DOM.scrollIntoViewIfNeeded", { objectId });
+            const quads = await send(tab.id, "DOM.getContentQuads", { objectId });
+            point = quadCenter(quads && quads.quads);
+          } else if (typeof args.x === "number" && typeof args.y === "number") {
+            point = { x: args.x, y: args.y };
+          } else {
+            throw new Error("refused: click needs { ref } or { x, y }");
+          }
+          for (const mouseType of ["mousePressed", "mouseReleased"]) {
+            await send(tab.id, "Input.dispatchMouseEvent", {
+              type: mouseType,
+              x: point.x,
+              y: point.y,
+              button: "left",
+              clickCount: 1,
+            });
+          }
+          return { clicked: true };
+        }
+        case "type":
+        case "fill": {
+          if (args.ref === undefined) throw new Error(`refused: ${type} needs { ref, text }`);
+          if (typeof args.text !== "string") throw new Error(`refused: ${type} needs { ref, text }`);
+          const objectId = await resolveRef(tab.id, String(args.ref));
+          await send(tab.id, "DOM.focus", { objectId });
+          if (type === "fill") {
+            // Select-all (Ctrl+A on Windows) so insertText replaces, not appends.
+            await send(tab.id, "Input.dispatchKeyEvent", {
+              type: "rawKeyDown",
+              windowsVirtualKeyCode: 65,
+              key: "a",
+              modifiers: 2,
+            });
+            await send(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", modifiers: 2 });
+          }
+          await send(tab.id, "Input.insertText", { text: args.text });
+          return { typed: true };
+        }
+        case "press_key": {
+          const key = args.key;
+          if (typeof key !== "string" || !key) throw new Error("refused: press_key needs { key }");
+          if (key.length === 1) {
+            await send(tab.id, "Input.dispatchKeyEvent", { type: "keyDown", text: key, key });
+            await send(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", key });
+          } else if (SB_KEY_CODES[key] !== undefined) {
+            await send(tab.id, "Input.dispatchKeyEvent", {
+              type: "rawKeyDown",
+              windowsVirtualKeyCode: SB_KEY_CODES[key],
+              key,
+            });
+            await send(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", key });
+          } else {
+            throw new Error(`refused: unknown key ${key}`);
+          }
+          return { pressed: true };
+        }
+        case "scroll": {
+          let point;
+          if (args.ref !== undefined) {
+            const objectId = await resolveRef(tab.id, String(args.ref));
+            const quads = await send(tab.id, "DOM.getContentQuads", { objectId });
+            point = quadCenter(quads && quads.quads);
+          } else {
+            const metrics = await send(tab.id, "Page.getLayoutMetrics", {});
+            const vp = (metrics && metrics.cssVisualViewport) || {};
+            point = { x: vp.pageX || 400, y: vp.pageY || 300 };
+          }
+          await send(tab.id, "Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: point.x,
+            y: point.y,
+            deltaX: Number(args.deltaX) || 0,
+            deltaY: args.deltaY === undefined ? 400 : Number(args.deltaY) || 0,
+          });
+          return { scrolled: true };
+        }
+        case "wait_for": {
+          const wantRef = args.ref !== undefined ? String(args.ref) : null;
+          const wantText = typeof args.text === "string" && args.text ? args.text.toLowerCase() : null;
+          if (!wantRef && !wantText) throw new Error("refused: wait_for needs { ref } or { text }");
+          const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || SB_WAIT_DEFAULT_MS, 1000), SB_WAIT_MAX_MS);
+          const deadline = Date.now() + timeoutMs;
+          for (;;) {
+            const snap = await snapshotNow(tab.id);
+            const hit = wantRef
+              ? snap.nodes.some((n) => n.ref === wantRef)
+              : snap.nodes.some((n) => (n.name || "").toLowerCase().includes(wantText));
+            if (hit) return { found: true };
+            if (Date.now() >= deadline) throw new Error("wait-timeout");
+            await new Promise((r) => setTimeout(r, SB_WAIT_POLL_MS));
+          }
         }
       }
       throw new Error("unknown-command: " + type);

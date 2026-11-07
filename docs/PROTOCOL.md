@@ -44,12 +44,12 @@ touch disk, and `GET /v1/devices` never exposes hashes.
 | `navigate` | `{ url }` | `{ url, title }` | M2 |
 | `screenshot` | `{}` | `{ pngBase64 }` | M2 |
 | `dom_snapshot` | `{}` | `{ snapshot }` | M2 |
-| `click` | `{ ref }` or `{ x, y }` | `{ clicked }` | M3 |
-| `type` / `fill` | `{ ref, text }` | `{ typed }` | M3 |
-| `press_key` | `{ key }` | `{ pressed }` | M3 |
-| `scroll` | `{ ref?, dx?, dy? }` | `{ scrolled }` | M3 |
+| `click` | `{ ref }` or `{ x, y }` | `{ clicked }` | M3: scrolls into view, clicks the quad center. Stale refs refuse — re-snapshot. |
+| `type` / `fill` | `{ ref, text }` | `{ typed }` | M3: focus + insert; `fill` select-alls first (replace, never append). |
+| `press_key` | `{ key }` | `{ pressed }` | M3: single char or Enter/Tab/Escape/Arrows/Backspace/Delete/Home/End/PageUp/PageDown. |
+| `scroll` | `{ ref?, dx?, dy? }` | `{ scrolled }` | M3: wheel at the ref center, else viewport center; `dy` defaults to 400. |
 | `get_state` | `{}` | `{ url, title, loading }` | M2 |
-| `wait_for` | `{ text?, ref?, timeoutMs? }` | `{ found }` | M3 |
+| `wait_for` | `{ text?, ref?, timeoutMs? }` | `{ found }` | M3: polls snapshots every 500 ms (default 10 s, max 60 s); timeout is an error. |
 
 Deliberately excluded from v0: arbitrary JavaScript evaluation
 (`Runtime.evaluate`, free-form `scripting.executeScript`). See DESIGN §5.
