@@ -7,7 +7,7 @@
  * M2 adds: the CDP driver and command routing over the live socket.
  */
 
-importScripts("lib/safety.js", "lib/audit.js", "lib/link.js");
+importScripts("lib/safety.js", "lib/audit.js", "lib/link.js", "lib/dom.js", "lib/cdp.js");
 
 const SB_STORE = {
   TOKEN: "sb.pairing", // { token, installId, bridgeUrl, pairedAt } | null
@@ -27,6 +27,7 @@ let mem = {
   wantConnection: false, // true while paired: a dropped socket must come back
   backoffAttempt: 0,
   reconnectTimer: null,
+  driver: null, // CDP driver, created below once hooks exist (M2)
 };
 
 function sbUuid() {
@@ -147,9 +148,23 @@ async function sbOnSocketMessage(ev, pairing) {
   } catch {
     return;
   }
-  // M2 routes bridge commands here. M1 logs anything unexpected.
-  if (msg && msg.type && msg.type !== "auth") {
-    await sbAudit("bridge-msg", "", "ignored", String(msg.type).slice(0, 100));
+  if (!msg || typeof msg.id !== "string" || typeof msg.type !== "string") return;
+  if (msg.type === "auth" || msg.type === "pair" || msg.type === "ping") return; // not commands
+  // Bridge command (M2): execute against the shared tab and answer.
+  let reply;
+  try {
+    const result = await sbExecuteCommand(msg.type, msg.payload || {});
+    reply = { id: msg.id, ok: true, result };
+    await sbAudit(msg.type, result && result.url ? new URL(result.url).origin : "", "ok", "");
+  } catch (err) {
+    const message = String((err && err.message) || err);
+    reply = { id: msg.id, ok: false, error: message };
+    await sbAudit(msg.type, "", message.startsWith("refused") ? "refused" : "error", message.slice(0, 200));
+  }
+  try {
+    mem.socket.send(JSON.stringify(reply));
+  } catch {
+    /* socket died mid-command; the bridge times out and reports it */
   }
 }
 
@@ -351,7 +366,26 @@ async function sbEnsureConnection() {
   return sbConnectSocket(pairing);
 }
 
-// ---- Session control (M0, unchanged semantics) ----
+// ---- CDP driver wiring (logic lives in lib/cdp.js, tested under node) ----
+
+function sbDriver() {
+  if (!mem.driver) {
+    mem.driver = createDriver({
+      chromeApi: chrome,
+      getSession: sbGetSession,
+      getAllowlist: sbGetAllowlist,
+      condense: sbCondenseAXTree,
+      checkUrl: sbCheckUrl,
+    });
+  }
+  return mem.driver;
+}
+
+function sbExecuteCommand(type, payload) {
+  return sbDriver().execute(type, payload);
+}
+
+// ---- Session control (M0 attach semantics, M2 debugger attach) ----
 
 async function sbStartSession(tabId) {
   if (!Number.isInteger(tabId)) throw new Error("set a shared tab first");
@@ -363,7 +397,15 @@ async function sbStartSession(tabId) {
     throw new Error("refused: " + check.reason);
   }
   await sbSetSession({ active: true, tabId, startedAt: new Date().toISOString() });
+  try {
+    await sbDriver().attachForSession(tabId);
+  } catch (err) {
+    await sbSetSession({ active: false, tabId: null, startedAt: null });
+    await sbAudit("start-session", tab.url || "", "error", String((err && err.message) || err));
+    throw err;
+  }
   await sbAudit("start-session", new URL(tab.url).origin, "ok", "tab " + tabId);
+  // M4: banner injection via chrome.scripting goes here.
   return mem._session;
 }
 
@@ -375,6 +417,7 @@ async function sbStopSession(reason) {
     }
   } finally {
     await sbSetSession({ active: false, tabId: null, startedAt: null });
+    if (mem.driver) mem.driver.reset();
     await sbAudit("stop-session", "", "ok", reason || "user stop");
   }
   return mem._session;

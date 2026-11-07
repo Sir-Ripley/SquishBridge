@@ -31,7 +31,7 @@ test("GET /health reports ok + version", async () => {
   }
 });
 
-test("unknown routes 404, commands still 501 until M2", async () => {
+test("unknown routes 404; commands accept POST only (GET is 501)", async () => {
   const server = createServer();
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   try {

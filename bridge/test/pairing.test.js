@@ -114,7 +114,7 @@ test("pairing flow: code -> exchange -> devices -> revoke", async () => {
   const refused = await nextMessage(ws);
   assert.equal(refused.id, "c1");
   assert.equal(refused.ok, false);
-  assert.equal(refused.error, "M2-eyes");
+  assert.equal(refused.error, "unknown-message-type");
 
   // Revoke drops the device and closes the socket.
   const closed = new Promise((r) => ws.on("close", (code) => r(code)));

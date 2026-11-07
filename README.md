@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: M1 pairing landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); pairing (one-time code → device token over the socket, token-hash store, revoke, auto-reconnect) works end to end. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M2 eyes (navigate/screenshot/DOM).
+> **Status: M2 eyes landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); pairing and the Squish → bridge → extension command round trip work end to end, with `navigate`, `screenshot`, `dom_snapshot`, and `get_state` driving the shared tab over CDP. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M3 hands (click/type/keys). Note: real-tab attach is code-verified with a stubbed `chrome` API — first live attach happens on Rodney's machine when he reloads the extension.
 
 ## Why
 

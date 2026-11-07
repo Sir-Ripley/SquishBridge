@@ -17,6 +17,7 @@ const { WebSocketServer } = require("ws");
 const audit = require("./lib/audit");
 const tokens = require("./lib/tokens");
 const pairing = require("./lib/pairing");
+const { createRouter } = require("./lib/router");
 
 const VERSION = require("./package.json").version;
 const HOST = process.env.SQUISH_BRIDGE_HOST || "127.0.0.1";
@@ -75,12 +76,39 @@ function createServer({ devicesFile = DEVICES_FILE } = {}) {
   const store = pairing.createPairingStore();
   const devices = pairing.loadDevices(devicesFile);
   const sockets = new Map(); // installId -> ws
+  const routers = new Map(); // installId -> router
+
+  function routerFor(installId) {
+    let r = routers.get(installId);
+    if (!r) {
+      const ws = sockets.get(installId);
+      if (!ws) return null;
+      r = createRouter({
+        send: (message) => ws.send(JSON.stringify(message)),
+      });
+      routers.set(installId, r);
+    }
+    return r;
+  }
+
+  function dropRouter(installId, err) {
+    const r = routers.get(installId);
+    routers.delete(installId);
+    if (r && err) {
+      try {
+        r.failAll(err);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 
   function persist() {
     pairing.saveDevices(devicesFile, devices);
   }
 
   function closeSocket(installId, code, reason) {
+    dropRouter(installId, new Error("socket closed: " + reason));
     const ws = sockets.get(installId);
     if (ws) {
       sockets.delete(installId);
@@ -111,10 +139,11 @@ function createServer({ devicesFile = DEVICES_FILE } = {}) {
             ok: true,
             version: VERSION,
             pairing: "ready",
-            commands: "M2-eyes",
+            commands: "ready",
             devices: Object.keys(devices).length,
             connected: live,
             pendingCodes: pairing.pendingCount(store),
+            pendingCommands: [...routers.values()].reduce((n, r) => n + r.pendingCount(), 0),
           },
           origin
         );
@@ -162,6 +191,52 @@ function createServer({ devicesFile = DEVICES_FILE } = {}) {
           lastSeenAt: d.lastSeenAt,
         }));
         return sendJson(res, req, 200, { ok: true, devices: list }, origin);
+      }
+
+      // Squish-only: submit a command to a paired browser. The bridge
+      // forwards it over the extension socket and awaits the result —
+      // the HTTP response IS the command result (M2 eyes).
+      if (req.method === "POST" && url.pathname === "/v1/commands") {
+        if (!isLoopback(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+        const body = await readJson(req).catch(() => null);
+        if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
+        if (!body || typeof body.type !== "string" || !body.type) {
+          return sendJson(res, req, 400, { ok: false, error: "command type required" }, origin);
+        }
+        const installId =
+          body.installId === undefined ? [...sockets.keys()][0] || null : String(body.installId);
+        if (body.installId !== undefined && !sockets.has(installId)) {
+          audit.append(LOG_FILE, audit.entry("CMD", `/v1/commands ${body.type}`, 409, "", "no such device"));
+          return sendJson(res, req, 409, { ok: false, error: "device-not-connected" }, origin);
+        }
+        const router = installId ? routerFor(installId) : null;
+        if (!router) {
+          audit.append(LOG_FILE, audit.entry("CMD", `/v1/commands ${body.type}`, 409, "", "no device connected"));
+          return sendJson(res, req, 409, { ok: false, error: "no-device-connected" }, origin);
+        }
+        if (body.installId === undefined && sockets.size > 1) {
+          return sendJson(res, req, 409, { ok: false, error: "ambiguous-device" }, origin);
+        }
+        try {
+          const result = await router.sendCommand(body.type, body.payload || {}, {
+            timeoutMs: body.timeoutMs,
+          });
+          audit.append(
+            LOG_FILE,
+            audit.entry("CMD", `/v1/commands ${body.type}`, result.ok ? 200 : 502, "", installId)
+          );
+          return sendJson(res, req, result.ok ? 200 : 502, result, origin);
+        } catch (err) {
+          const status = err && err.code === "timeout" ? 408 : 502;
+          audit.append(LOG_FILE, audit.entry("CMD", `/v1/commands ${body.type}`, status, "", installId));
+          return sendJson(
+            res,
+            req,
+            status,
+            { ok: false, error: err && err.code === "timeout" ? "command-timeout" : String((err && err.message) || err) },
+            origin
+          );
+        }
       }
 
       // Squish-only (or extension unpair via its own token — M1: loopback
@@ -293,23 +368,30 @@ function createServer({ devicesFile = DEVICES_FILE } = {}) {
           }
           return;
         }
-        // Authenticated: pre-M2, only ping is answered; everything else
-        // is refused (and logged) until command routing lands.
+        // Authenticated traffic: command results (no type) complete the
+        // pending loopback request; ping is answered; anything else is
+        // logged and ignored.
         if (!msg || typeof msg.id !== "string") return;
+        if (!msg.type) {
+          const router = routers.get(authed.installId);
+          if (router) router.handleResult(msg);
+          return;
+        }
         if (msg.type === "ping") {
           ws.send(JSON.stringify({ id: msg.id, ok: true, result: { pong: true } }));
-        } else {
-          audit.append(
-            LOG_FILE,
-            audit.entry("WS", `/v1/extension ${msg.type || "?"}`, 501, "", authed.installId)
-          );
-          ws.send(JSON.stringify({ id: msg.id, ok: false, error: "M2-eyes" }));
+          return;
         }
+        audit.append(
+          LOG_FILE,
+          audit.entry("WS", `/v1/extension ${msg.type || "?"}`, 501, "", authed.installId)
+        );
+        ws.send(JSON.stringify({ id: msg.id, ok: false, error: "unknown-message-type" }));
       });
 
       ws.on("close", () => {
         clearTimeout(authTimer);
         if (authed && sockets.get(authed.installId) === ws) sockets.delete(authed.installId);
+        if (authed) dropRouter(authed.installId, new Error("extension disconnected"));
         audit.append(LOG_FILE, audit.entry("WS", "/v1/extension", 0, "", "disconnected"));
       });
     });
