@@ -31,15 +31,16 @@ test("GET /health reports ok + version", async () => {
   }
 });
 
-test("unknown routes 404, pairing/commands 501 until their milestone", async () => {
+test("unknown routes 404, commands still 501 until M2", async () => {
   const server = createServer();
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   try {
     const port = server.address().port;
     const notFound = await get(port, "/nope");
     assert.equal(notFound.status, 404);
-    const pairing = await get(port, "/v1/pair/code");
-    assert.equal(pairing.status, 501);
+    // Pairing is real in M1 but POST-only: a GET is not a pairing exchange.
+    const pairingGet = await get(port, "/v1/pair/code");
+    assert.equal(pairingGet.status, 404);
     const commands = await get(port, "/v1/commands");
     assert.equal(commands.status, 501);
   } finally {

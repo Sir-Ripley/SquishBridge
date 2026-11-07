@@ -17,6 +17,26 @@ or: `{ "id": "<same uuid>", "ok": false, "error": "<machine-readable reason>" }`
 `missing-url`, `bad-url`, `origin must be https`, session errors, …) so the
 agent can branch on them. Human detail goes in the audit log, not the error.
 
+## Pairing (M1)
+
+No fetch, no host permission: the whole exchange runs over the socket.
+
+1. Squish mints a code over loopback: `POST /v1/pair/code` → `{ ok, code, expiresAt }`
+   (8 unambiguous chars, 10-minute TTL, single-use, burns on misuse).
+2. Extension opens `ws(s)://<bridge>/v1/extension` and sends
+   `{ id, type: "pair", payload: { code, installId } }` →
+   `{ id, ok, result: { token, installId } | error }`.
+3. Extension authenticates on the same socket:
+   `{ id, type: "auth", payload: { token, installId } }` →
+   `{ id, ok, result: { hello, version } }`. The socket stays open;
+   drops reconnect with exponential backoff (1s → 60s cap, jitter).
+4. Unpair is local (token deleted); Squish revokes bridge-side via
+   `POST /v1/devices/revoke`, which also closes the live socket (4403).
+   A rejected token (4401) clears pairing on the extension automatically.
+
+Only token hashes rest on the bridge (`devices.json`); raw tokens never
+touch disk, and `GET /v1/devices` never exposes hashes.
+
 ## v0 command set
 
 | Command | Payload | Result | Milestone |

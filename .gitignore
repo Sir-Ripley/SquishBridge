@@ -1,5 +1,7 @@
 node_modules/
 bridge/audit.log.jsonl
+bridge/devices.json
+bridge/*.tmp
 *.log
 .DS_Store/
 Thumbs.db/

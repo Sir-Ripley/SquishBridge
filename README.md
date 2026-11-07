@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: M0 scaffold landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); the extension skeleton and bridge skeleton from milestone M0 are in the tree. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M1 pairing.
+> **Status: M1 pairing landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); pairing (one-time code → device token over the socket, token-hash store, revoke, auto-reconnect) works end to end. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M2 eyes (navigate/screenshot/DOM).
 
 ## Why
 

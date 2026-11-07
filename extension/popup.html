@@ -23,10 +23,15 @@
 
   <section aria-label="Pairing">
     <h2>Pairing</h2>
-    <p class="muted">Pairing arrives in M1. The extension is not connected yet.</p>
+    <p class="muted">Ask Squish for a one-time code, enter it with the bridge address.</p>
+    <input id="bridgeUrl" type="text" placeholder="ws://100.64.0.1:3031" aria-label="Bridge address" />
     <div class="row">
-      <button id="pair" type="button" disabled>Pair (M1)</button>
-      <button id="unpair" type="button" disabled>Unpair (M1)</button>
+      <input id="pairCode" type="text" placeholder="pairing code" aria-label="Pairing code" />
+      <button id="pair" type="button">Pair</button>
+    </div>
+    <p id="pairInfo" class="muted"></p>
+    <div class="row">
+      <button id="unpair" type="button">Unpair</button>
     </div>
   </section>
 

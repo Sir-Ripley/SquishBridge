@@ -1,30 +1,43 @@
 "use strict";
 
-/* Squish Bridge — background service worker (M0 scaffold).
+/* Squish Bridge — background service worker (M1).
  * Owns: pairing state, allowlist, session state, audit log, bridge socket.
- * M0: local state machine + safety gate + audit + STOP are real.
- * M1 (pairing/WS) and M2 (CDP driver) arrive behind the clearly-marked
- * NOT-IMPLEMENTED stubs below. The scaffolding compiles and loads now.
+ * Real in M1: pair/unpair, token issue exchange over the socket, WSS
+ * connect + exponential-backoff reconnect, heartbeat watchdog via alarms.
+ * M2 adds: the CDP driver and command routing over the live socket.
  */
 
-importScripts("lib/safety.js", "lib/audit.js");
+importScripts("lib/safety.js", "lib/audit.js", "lib/link.js");
 
 const SB_STORE = {
-  TOKEN: "sb.pairing",
+  TOKEN: "sb.pairing", // { token, installId, bridgeUrl, pairedAt } | null
+  INSTALL_ID: "sb.installId", // stable per browser profile; survives unpair
   ALLOWLIST: "sb.allowlist",
   SESSION: "sb.session",
   AUDIT: "sb.audit",
-  BRIDGE_URL: "sb.bridgeUrl",
 };
 
 const SB_KEEPALIVE_ALARM = "sb-keepalive";
 const SB_VERSION = "0.1.0";
+const SB_PAIR_TIMEOUT_MS = 20000;
 
 let mem = {
-  socket: null, // M1: WebSocket to the bridge.
+  socket: null,
   socketState: "disconnected", // disconnected | connecting | connected
-  session: { active: false, tabId: null, startedAt: null },
+  wantConnection: false, // true while paired: a dropped socket must come back
+  backoffAttempt: 0,
+  reconnectTimer: null,
 };
+
+function sbUuid() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 async function sbStoreGet(keys) {
   return chrome.storage.local.get(keys);
@@ -45,19 +58,23 @@ async function sbGetSession() {
   const got = await sbStoreGet([SB_STORE.SESSION]);
   const s = got[SB_STORE.SESSION];
   if (s && typeof s === "object") {
-    mem.session = {
+    mem._session = {
       active: !!s.active,
       tabId: Number.isInteger(s.tabId) ? s.tabId : null,
       startedAt: s.startedAt || null,
     };
+  } else {
+    mem._session = mem._session || { active: false, tabId: null, startedAt: null };
   }
-  return mem.session;
+  return mem._session;
 }
 
 async function sbSetSession(patch) {
-  mem.session = { ...mem.session, ...patch };
-  await sbStoreSet({ [SB_STORE.SESSION]: mem.session });
-  return mem.session;
+  const cur = await sbGetSession();
+  const next = { ...cur, ...patch };
+  await sbStoreSet({ [SB_STORE.SESSION]: next });
+  mem._session = next;
+  return next;
 }
 
 async function sbGetAudit() {
@@ -72,7 +89,269 @@ async function sbAudit(command, targetOrigin, status, detail) {
   return log;
 }
 
-// ---- Session control (real in M0) ----
+// ---- Pairing (real in M1) ----
+
+async function sbGetInstallId() {
+  const got = await sbStoreGet([SB_STORE.INSTALL_ID]);
+  let id = got[SB_STORE.INSTALL_ID];
+  if (typeof id !== "string" || !/^[A-Za-z0-9-]{8,64}$/.test(id)) {
+    id = "ext-" + sbUuid();
+    await sbStoreSet({ [SB_STORE.INSTALL_ID]: id });
+  }
+  return id;
+}
+
+async function sbGetPairing() {
+  const got = await sbStoreGet([SB_STORE.TOKEN]);
+  const p = got[SB_STORE.TOKEN];
+  if (p && typeof p === "object" && typeof p.token === "string" && p.token) return p;
+  return null;
+}
+
+function sbAdoptSocket(ws, pairing) {
+  sbDropSocket();
+  mem.socket = ws;
+  mem.socketState = "connected";
+  mem.wantConnection = true;
+  mem.backoffAttempt = 0;
+  ws.onclose = (ev) => sbOnSocketClose(ev, pairing);
+  ws.onerror = () => {
+    sbAudit("socket", "", "error", "socket error").catch(() => {});
+  };
+  ws.onmessage = (ev) => sbOnSocketMessage(ev, pairing);
+}
+
+function sbDropSocket() {
+  if (mem.reconnectTimer) {
+    clearTimeout(mem.reconnectTimer);
+    mem.reconnectTimer = null;
+  }
+  const ws = mem.socket;
+  mem.socket = null;
+  if (ws) {
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.onmessage = null;
+    try {
+      ws.close(1000, "replaced");
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+async function sbOnSocketMessage(ev, pairing) {
+  let msg = null;
+  try {
+    msg = JSON.parse(ev.data);
+  } catch {
+    return;
+  }
+  // M2 routes bridge commands here. M1 logs anything unexpected.
+  if (msg && msg.type && msg.type !== "auth") {
+    await sbAudit("bridge-msg", "", "ignored", String(msg.type).slice(0, 100));
+  }
+}
+
+async function sbOnSocketClose(ev, pairing) {
+  mem.socket = null;
+  mem.socketState = "disconnected";
+  const code = ev && ev.code;
+  if (code === 4401 || code === 4403) {
+    // Token dead (rejected or revoked): stop wanting the connection and
+    // clear the token. The installId survives, so re-pairing is one step.
+    mem.wantConnection = false;
+    await sbStoreSet({ [SB_STORE.TOKEN]: null });
+    await sbAudit("socket", "", "unpaired", code === 4403 ? "device revoked" : "token rejected");
+    return;
+  }
+  await sbAudit("socket", "", "dropped", "code " + code);
+  if (mem.wantConnection) sbScheduleReconnect(pairing);
+}
+
+function sbScheduleReconnect(pairing) {
+  if (!pairing || mem.reconnectTimer || mem.socket) return;
+  const delay = sbBackoffDelay(mem.backoffAttempt);
+  mem.backoffAttempt += 1;
+  mem.reconnectTimer = setTimeout(() => {
+    mem.reconnectTimer = null;
+    sbConnectSocket(pairing).catch(() => {});
+  }, delay);
+}
+
+function sbConnectSocket(pairing) {
+  return new Promise((resolve) => {
+    if (mem.socket) return resolve(true);
+    mem.socketState = "connecting";
+    let ws;
+    try {
+      ws = new WebSocket(sbSocketUrl(pairing.bridgeUrl));
+    } catch (err) {
+      mem.socketState = "disconnected";
+      sbScheduleReconnect(pairing);
+      return resolve(false);
+    }
+    const authTimer = setTimeout(() => {
+      try {
+        ws.close(4408, "auth timeout");
+      } catch {
+        /* ignore */
+      }
+    }, SB_PAIR_TIMEOUT_MS);
+    ws.onopen = () => {
+      ws.send(JSON.stringify(sbAuthMessage(sbUuid(), pairing.token, pairing.installId)));
+    };
+    ws.onmessage = async (ev) => {
+      let msg = null;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (!sbIsAuthOk(msg)) {
+        // Auth refused: the bridge will close with 4401; let onclose handle it.
+        return;
+      }
+      clearTimeout(authTimer);
+      sbAdoptSocket(ws, pairing);
+      await sbAudit("socket", "", "connected", "reconnected");
+      resolve(true);
+    };
+    ws.onclose = (ev) => {
+      clearTimeout(authTimer);
+      mem.socketState = "disconnected";
+      sbOnSocketClose(ev, pairing).catch(() => {});
+      resolve(false);
+    };
+    ws.onerror = () => {
+      // onclose follows; nothing to do here.
+    };
+  });
+}
+
+// Pair: open a socket, trade the one-time code for a device token on that
+// same socket (no fetch, so no host permission is needed), then adopt the
+// socket as the live connection.
+async function sbPair(bridgeUrl, code) {
+  const normalized = sbNormalizeBridgeUrl(bridgeUrl);
+  const cleanCode = String(code || "").trim();
+  if (!cleanCode) throw new Error("enter the pairing code from chat");
+  const installId = await sbGetInstallId();
+  sbDropSocket();
+  mem.wantConnection = false;
+  mem.socketState = "connecting";
+
+  const ws = await new Promise((resolve, reject) => {
+    let sock;
+    try {
+      sock = new WebSocket(normalized + SB_WS_PATH);
+    } catch (err) {
+      reject(new Error("cannot reach bridge: " + err.message));
+      return;
+    }
+    const timer = setTimeout(() => {
+      try {
+        sock.close();
+      } catch {
+        /* ignore */
+      }
+      reject(new Error("bridge did not answer in time"));
+    }, SB_PAIR_TIMEOUT_MS);
+    sock.onopen = () => {
+      sock.send(JSON.stringify({ id: sbUuid(), type: "pair", payload: { code: cleanCode, installId } }));
+    };
+    sock.onmessage = (ev) => {
+      let msg = null;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      clearTimeout(timer);
+      if (msg && msg.ok === true && msg.result && msg.result.token) {
+        resolve({ sock, token: msg.result.token });
+      } else {
+        try {
+          sock.close();
+        } catch {
+          /* ignore */
+        }
+        reject(new Error("pairing refused: " + ((msg && msg.error) || "unknown")));
+      }
+    };
+    sock.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("cannot reach bridge at " + normalized));
+    };
+  });
+
+  const pairing = { token: ws.token, installId, bridgeUrl: normalized, pairedAt: new Date().toISOString() };
+  await sbStoreSet({ [SB_STORE.TOKEN]: pairing });
+  // Authenticate on the same socket and adopt it.
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), SB_PAIR_TIMEOUT_MS);
+    ws.sock.onmessage = (ev) => {
+      let msg = null;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (sbIsAuthOk(msg)) {
+        clearTimeout(timer);
+        resolve(true);
+      }
+    };
+    ws.sock.onerror = () => {};
+    ws.sock.onclose = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    ws.sock.send(JSON.stringify(sbAuthMessage(sbUuid(), pairing.token, pairing.installId)));
+  }).then(async (authed) => {
+    if (authed) {
+      sbAdoptSocket(ws.sock, pairing);
+      await sbAudit("pair", normalized, "ok", installId);
+    } else {
+      try {
+        ws.sock.close();
+      } catch {
+        /* ignore */
+      }
+      mem.socketState = "disconnected";
+      await sbAudit("pair", normalized, "auth-failed", installId);
+      throw new Error("bridge accepted the code but auth did not complete");
+    }
+  });
+  return pairing;
+}
+
+async function sbUnpair(reason) {
+  mem.wantConnection = false;
+  sbDropSocket();
+  mem.socketState = "disconnected";
+  mem.backoffAttempt = 0;
+  await sbStoreSet({ [SB_STORE.TOKEN]: null });
+  await sbAudit("unpair", "", "ok", reason || "user unpair");
+}
+
+async function sbEnsureConnection() {
+  const pairing = await sbGetPairing();
+  if (!pairing) {
+    mem.wantConnection = false;
+    mem.socketState = "disconnected";
+    return false;
+  }
+  mem.wantConnection = true;
+  if (mem.socket && mem.socket.readyState === WebSocket.OPEN) {
+    mem.socketState = "connected";
+    return true;
+  }
+  if (mem.socket) return true; // handshake in flight
+  return sbConnectSocket(pairing);
+}
+
+// ---- Session control (M0, unchanged semantics) ----
 
 async function sbStartSession(tabId) {
   if (!Number.isInteger(tabId)) throw new Error("set a shared tab first");
@@ -85,9 +364,7 @@ async function sbStartSession(tabId) {
   }
   await sbSetSession({ active: true, tabId, startedAt: new Date().toISOString() });
   await sbAudit("start-session", new URL(tab.url).origin, "ok", "tab " + tabId);
-  // M2: chrome.debugger.attach + banner inject happen here.
-  // M4: banner injection via chrome.scripting goes here.
-  return mem.session;
+  return mem._session;
 }
 
 async function sbStopSession(reason) {
@@ -100,17 +377,7 @@ async function sbStopSession(reason) {
     await sbSetSession({ active: false, tabId: null, startedAt: null });
     await sbAudit("stop-session", "", "ok", reason || "user stop");
   }
-  // M4: remove banner here.
-  return mem.session;
-}
-
-// ---- Bridge socket (M1 stub) ----
-
-function sbConnectBridge() {
-  // M1 implements: read token + bridge URL, WSS connect with backoff,
-  // authenticate, route {id,type,payload} commands, return results.
-  mem.socketState = "disconnected";
-  return Promise.resolve({ ok: false, notImplemented: "M1-pairing" });
+  return mem._session;
 }
 
 // ---- Popup message API ----
@@ -120,10 +387,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const type = msg && msg.type;
     switch (type) {
       case "get-status": {
-        const [allowlist, session, audit] = await Promise.all([
+        const [allowlist, session, auditLog, pairing, installId] = await Promise.all([
           sbGetAllowlist(),
           sbGetSession(),
           sbGetAudit(),
+          sbGetPairing(),
+          sbGetInstallId(),
         ]);
         sendResponse({
           ok: true,
@@ -131,8 +400,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           socketState: mem.socketState,
           session,
           allowlist,
-          auditTail: audit.slice(-50),
-          pairing: { paired: false, milestone: "M1-pairing" },
+          auditTail: auditLog.slice(-50),
+          pairing: pairing
+            ? { paired: true, installId: pairing.installId, bridgeUrl: pairing.bridgeUrl }
+            : { paired: false, installId, bridgeUrl: "" },
         });
         break;
       }
@@ -140,7 +411,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (!Number.isInteger(msg.tabId)) throw new Error("tabId must be an integer");
         await sbSetSession({ active: false, tabId: msg.tabId, startedAt: null });
         await sbAudit("set-tab", "", "ok", "tab " + msg.tabId);
-        sendResponse({ ok: true, session: mem.session });
+        sendResponse({ ok: true, session: mem._session });
         break;
       }
       case "start-session": {
@@ -180,11 +451,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true, audit: [] });
         break;
       }
-      case "pair":
-      case "unpair":
+      case "pair": {
+        const pairing = await sbPair(msg.bridgeUrl, msg.code);
+        sendResponse({
+          ok: true,
+          pairing: { paired: true, installId: pairing.installId, bridgeUrl: pairing.bridgeUrl },
+          socketState: mem.socketState,
+        });
+        break;
+      }
+      case "unpair": {
+        await sbUnpair(msg.reason || "popup unpair");
+        sendResponse({ ok: true, socketState: mem.socketState });
+        break;
+      }
       case "connect-bridge": {
-        await sbAudit(msg.type, "", "refused", "M1-pairing not implemented yet");
-        sendResponse({ ok: false, error: "pairing arrives in M1 — see build plan" });
+        const ok = await sbEnsureConnection();
+        sendResponse({ ok, socketState: mem.socketState });
         break;
       }
       default:
@@ -196,7 +479,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // async response
 });
 
-// ---- Hard STOP: keyboard shortcut + tab closed + debugger detached ----
+// ---- Hard STOP ----
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === "stop-session") {
@@ -218,7 +501,7 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
   }
 });
 
-// ---- MV3 keepalive ----
+// ---- MV3 keepalive + socket watchdog ----
 
 chrome.runtime.onInstalled.addListener(async () => {
   const got = await sbStoreGet([SB_STORE.ALLOWLIST]);
@@ -230,6 +513,15 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm && alarm.name === SB_KEEPALIVE_ALARM) {
-    await sbGetSession(); // rehydrate; M1 also probes the socket here.
+    await sbGetSession(); // rehydrate
+    const pairing = await sbGetPairing();
+    if (pairing && !mem.socket) sbEnsureConnection().catch(() => {});
   }
 });
+
+chrome.runtime.onStartup.addListener(() => {
+  sbEnsureConnection().catch(() => {});
+});
+
+// Connect on worker load if already paired (covers install/update restarts).
+sbEnsureConnection().catch(() => {});

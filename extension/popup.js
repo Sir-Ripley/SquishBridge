@@ -15,9 +15,12 @@ function showError(err) {
 function renderStatus(s) {
   $("version").textContent = "v" + (s.version || "?");
   const sess = s.session || {};
+  const paired = !!(s.pairing && s.pairing.paired);
   $("status").textContent = sess.active
     ? `Active — driving tab ${sess.tabId}`
-    : `Idle — bridge ${s.socketState || "disconnected"}`;
+    : paired
+      ? `Paired — bridge ${s.socketState || "disconnected"}`
+      : "Not paired.";
   $("sessionInfo").textContent = sess.active
     ? `Sharing tab ${sess.tabId} since ${sess.startedAt || "?"}. Banner is shown on the page.`
     : sess.tabId != null
@@ -25,6 +28,13 @@ function renderStatus(s) {
       : "No shared tab selected.";
   $("start").disabled = sess.active || sess.tabId == null;
   $("stop").disabled = !sess.active;
+  const p = s.pairing || {};
+  $("pairInfo").textContent = paired
+    ? `Paired as ${p.installId} to ${p.bridgeUrl}.`
+    : `This browser: ${p.installId || "?"}. Not paired.`;
+  if (p.bridgeUrl && !$("bridgeUrl").value) $("bridgeUrl").value = p.bridgeUrl;
+  $("pair").disabled = paired;
+  $("unpair").disabled = !paired;
 }
 
 function renderAllowlist(list) {
@@ -139,6 +149,32 @@ $("clearAudit").addEventListener("click", async () => {
     const res = await send("clear-audit");
     if (!res.ok) throw new Error(res.error);
     renderAudit(res.audit);
+  } catch (err) {
+    showError(err);
+  }
+});
+
+$("pair").addEventListener("click", async () => {
+  try {
+    showError("");
+    $("pair").disabled = true;
+    const res = await send("pair", { bridgeUrl: $("bridgeUrl").value, code: $("pairCode").value });
+    if (!res.ok) throw new Error(res.error);
+    $("pairCode").value = "";
+    await refresh();
+  } catch (err) {
+    showError(err);
+  } finally {
+    await refresh().catch(() => {});
+  }
+});
+
+$("unpair").addEventListener("click", async () => {
+  try {
+    showError("");
+    const res = await send("unpair", { reason: "popup unpair" });
+    if (!res.ok) throw new Error(res.error);
+    await refresh();
   } catch (err) {
     showError(err);
   }
