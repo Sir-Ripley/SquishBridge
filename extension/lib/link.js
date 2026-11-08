@@ -6,7 +6,6 @@
  */
 
 const SB_WS_PATH = "/v1/extension";
-const SB_EXCHANGE_PATH = "/v1/pair/exchange";
 
 // Reconnect backoff: 1s, 2s, 4s, … capped at 60s, ±25% jitter.
 function sbBackoffDelay(attempt) {
@@ -39,12 +38,6 @@ function sbSocketUrl(bridgeUrl) {
   return sbNormalizeBridgeUrl(bridgeUrl) + SB_WS_PATH;
 }
 
-function sbHttpBase(bridgeUrl) {
-  const ws = new URL(sbNormalizeBridgeUrl(bridgeUrl));
-  ws.protocol = ws.protocol === "wss:" ? "https:" : "http:";
-  return ws.toString().replace(/\/$/, "");
-}
-
 function sbAuthMessage(id, token, installId) {
   return { id: String(id), type: "auth", payload: { token, installId } };
 }
@@ -56,11 +49,9 @@ function sbIsAuthOk(msg) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     SB_WS_PATH,
-    SB_EXCHANGE_PATH,
     sbBackoffDelay,
     sbNormalizeBridgeUrl,
     sbSocketUrl,
-    sbHttpBase,
     sbAuthMessage,
     sbIsAuthOk,
   };

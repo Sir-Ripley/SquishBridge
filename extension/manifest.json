@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Squish Bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pairs your signed-in Chrome to your Muse agent on one tab you designate. Credentials are never read or shared.",
   "minimum_chrome_version": "120",
   "permissions": ["debugger", "tabs", "storage", "alarms", "scripting"],

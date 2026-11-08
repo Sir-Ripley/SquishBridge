@@ -23,10 +23,9 @@ test("bridge URL normalization accepts host:port, rejects paths and http", () =>
   assert.throws(() => link.sbNormalizeBridgeUrl(""), /bridge address/);
 });
 
-test("socket + http URLs derive from the stored bridge URL", () => {
+test("socket URL derives from the stored bridge URL", () => {
   assert.equal(link.sbSocketUrl("ws://100.64.0.1:3031"), "ws://100.64.0.1:3031/v1/extension");
-  assert.equal(link.sbHttpBase("ws://100.64.0.1:3031"), "http://100.64.0.1:3031");
-  assert.equal(link.sbHttpBase("wss://example.ts.net:3031"), "https://example.ts.net:3031");
+  assert.equal(link.sbSocketUrl("wss://example.ts.net:3031/"), "wss://example.ts.net:3031/v1/extension");
 });
 
 test("auth envelope shape + ok detection", () => {

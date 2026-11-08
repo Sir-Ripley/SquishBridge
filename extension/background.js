@@ -18,7 +18,7 @@ const SB_STORE = {
 };
 
 const SB_KEEPALIVE_ALARM = "sb-keepalive";
-const SB_VERSION = "0.1.0";
+const SB_VERSION = chrome.runtime.getManifest().version;
 const SB_PAIR_TIMEOUT_MS = 20000;
 
 let mem = {

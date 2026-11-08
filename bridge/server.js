@@ -163,26 +163,10 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
         return sendJson(res, req, 201, { ok: true, code, expiresAt }, origin);
       }
 
-      // Extension (tailnet): trade a code for a device token. One try.
-      if (req.method === "POST" && url.pathname === "/v1/pair/exchange") {
-        const body = await readJson(req).catch(() => null);
-        if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
-        if (!pairing.validInstallId(body.installId)) {
-          pairing.failAttempt(store, body.code);
-          audit.append(LOG_FILE, audit.entry("PAIR", "/v1/pair/exchange", 400, "", "bad installId"));
-          return sendJson(res, req, 400, { ok: false, error: "bad-install-id" }, origin);
-        }
-        const redemption = pairing.redeemCode(store, body.code);
-        if (!redemption.ok) {
-          audit.append(LOG_FILE, audit.entry("PAIR", "/v1/pair/exchange", 403, "", redemption.error));
-          return sendJson(res, req, 403, { ok: false, error: redemption.error }, origin);
-        }
-        const token = tokens.issueToken();
-        pairing.registerDevice(devices, body.installId, tokens.hashToken(token));
-        persist();
-        audit.append(LOG_FILE, audit.entry("PAIR", "/v1/pair/exchange", 201, "", "device paired"));
-        return sendJson(res, req, 201, { ok: true, token, installId: body.installId }, origin);
-      }
+      // No HTTP exchange endpoint by design: the code→token trade happens
+      // over the socket (see the "pair" message below), so the extension
+      // never needs a host permission for the bridge address. One audited
+      // path, not two.
 
       // Squish-only: inspect devices (hashes never leave the bridge).
       if (req.method === "GET" && url.pathname === "/v1/devices") {

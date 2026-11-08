@@ -73,21 +73,32 @@ function nextMessage(ws) {
   return new Promise((resolve) => ws.once("message", (d) => resolve(JSON.parse(String(d)))));
 }
 
-test("pairing flow: code -> exchange -> devices -> revoke", async () => {
+test("pairing flow: code -> socket pair -> devices -> revoke", async () => {
   const issued = await post("/v1/pair/code", {});
   assert.equal(issued.status, 201);
   assert.match(issued.body.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
 
-  const bad = await post("/v1/pair/exchange", { code: "XXXX-XXXX", installId: "laptop-1" });
-  assert.equal(bad.status, 403);
+  // The whole exchange runs over the socket; there is no HTTP exchange.
+  const gone = await post("/v1/pair/exchange", { code: issued.body.code, installId: "laptop-1" });
+  assert.equal(gone.status, 404);
 
-  const exchanged = await post("/v1/pair/exchange", { code: issued.body.code, installId: "laptop-1" });
-  assert.equal(exchanged.status, 201);
-  assert.equal(typeof exchanged.body.token, "string");
-  const token = exchanged.body.token;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/extension`);
+  await new Promise((r) => ws.on("open", r));
+  ws.send(JSON.stringify({ id: "x0", type: "pair", payload: { code: "XXXX-XXXX", installId: "laptop-1" } }));
+  const bad = await nextMessage(ws);
+  assert.equal(bad.id, "x0");
+  assert.equal(bad.ok, false);
 
-  const reused = await post("/v1/pair/exchange", { code: issued.body.code, installId: "laptop-1" });
-  assert.equal(reused.status, 403);
+  ws.send(JSON.stringify({ id: "x1", type: "pair", payload: { code: issued.body.code, installId: "laptop-1" } }));
+  const paired = await nextMessage(ws);
+  assert.equal(paired.id, "x1");
+  assert.equal(paired.ok, true);
+  assert.equal(typeof paired.result.token, "string");
+  const token = paired.result.token;
+
+  ws.send(JSON.stringify({ id: "x2", type: "pair", payload: { code: issued.body.code, installId: "laptop-1" } }));
+  const reused = await nextMessage(ws);
+  assert.equal(reused.ok, false);
 
   const listed = await (await fetch(`http://127.0.0.1:${port}/v1/devices`)).json();
   assert.equal(listed.ok, true);
@@ -99,9 +110,7 @@ test("pairing flow: code -> exchange -> devices -> revoke", async () => {
   const onDisk = fs.readFileSync(tmpFile, "utf8");
   assert.ok(!onDisk.includes(token), "raw token must not be stored");
 
-  // WebSocket authenticates with the issued token.
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/extension`);
-  await new Promise((r) => ws.on("open", r));
+  // The same socket authenticates with the issued token.
   ws.send(JSON.stringify({ id: "a1", type: "auth", payload: { token, installId: "laptop-1" } }));
   const hello = await nextMessage(ws);
   assert.equal(hello.id, "a1");

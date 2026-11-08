@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: M4 safety hardening landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); every command is gated by the allowlist/denylist, drive time is bannered and badged, STOP works from the popup, the shortcut, and the page, and both audit logs are inspectable (popup viewer + download, bridge `GET /v1/audit`). The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M5 acceptance missions on Rodney's machine.
+> **Status: M5 — code complete, missions pending.** Everything through M4 is built, tested (44 unit tests green), and validated installable. What remains is the live run on Rodney's signed-in Chrome: [`docs/MISSIONS.md`](docs/MISSIONS.md) is the runbook with results tables. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install from [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Why
 
@@ -55,10 +55,17 @@ npm test    # unit tests: health endpoint, token helpers
 npm start   # serves http://127.0.0.1:3031 (loopback-only)
 ```
 
-Extension logic tests (no Chrome needed):
+All checks (no Chrome needed):
 
 ```
-node --test extension/test/*.test.js bridge/test/*.test.js
+node --test extension/test/*.test.js bridge/test/*.test.js  # 44 unit tests
+node tools/validate.js                                      # install readiness
+```
+
+Release the extension zip:
+
+```
+powershell -ExecutionPolicy Bypass -File tools/pack.ps1    # → dist/squish-bridge-<version>.zip
 ```
 
 ## Design & roadmap
