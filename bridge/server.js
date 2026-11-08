@@ -22,7 +22,9 @@ const { createRouter } = require("./lib/router");
 const VERSION = require("./package.json").version;
 const HOST = process.env.SQUISH_BRIDGE_HOST || "127.0.0.1";
 const PORT = Number(process.env.SQUISH_BRIDGE_PORT) || 3031;
-const LOG_FILE = process.env.SQUISH_BRIDGE_AUDIT_LOG || audit.DEFAULT_LOG_FILE;
+// Mutable so tests can point a server at a scratch log; production runs one
+// server per process, so this is never shared.
+let LOG_FILE = process.env.SQUISH_BRIDGE_AUDIT_LOG || audit.DEFAULT_LOG_FILE;
 const DEVICES_FILE =
   process.env.SQUISH_BRIDGE_DEVICES_FILE ||
   path.join(__dirname, "devices.json");
@@ -72,7 +74,8 @@ async function readJson(req) {
   return JSON.parse(raw);
 }
 
-function createServer({ devicesFile = DEVICES_FILE } = {}) {
+function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
+  if (auditLog) LOG_FILE = auditLog;
   const store = pairing.createPairingStore();
   const devices = pairing.loadDevices(devicesFile);
   const sockets = new Map(); // installId -> ws
@@ -191,6 +194,14 @@ function createServer({ devicesFile = DEVICES_FILE } = {}) {
           lastSeenAt: d.lastSeenAt,
         }));
         return sendJson(res, req, 200, { ok: true, devices: list }, origin);
+      }
+
+      // Squish-only: inspect the bridge audit log (page content is never
+      // logged, so entries are safe to read back into chat).
+      if (req.method === "GET" && url.pathname === "/v1/audit") {
+        if (!isLoopback(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+        const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
+        return sendJson(res, req, 200, { ok: true, entries: audit.readTail(LOG_FILE, limit) }, origin);
       }
 
       // Squish-only: submit a command to a paired browser. The bridge

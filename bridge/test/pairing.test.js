@@ -47,13 +47,14 @@ test("device store: register/find/revoke, hashes never match after revoke", () =
 
 // ---- Full HTTP + WebSocket flow against a live server ----
 
-const tmpFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sb-test-")), "devices.json");
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sb-test-"));
+const tmpFile = path.join(tmpDir, "devices.json");
 const { createServer } = require("../server");
 
 let server;
 let port;
 before(async () => {
-  server = createServer({ devicesFile: tmpFile });
+  server = createServer({ devicesFile: tmpFile, auditLog: path.join(tmpDir, "audit.log") });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   port = server.address().port;
 });

@@ -143,6 +143,23 @@ $("refreshAudit").addEventListener("click", async () => {
   }
 });
 
+$("downloadAudit").addEventListener("click", async () => {
+  try {
+    showError("");
+    const res = await send("get-audit");
+    if (!res.ok) throw new Error(res.error);
+    const blob = new Blob([JSON.stringify(res.audit, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "squish-bridge-audit.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) {
+    showError(err);
+  }
+});
+
 $("clearAudit").addEventListener("click", async () => {
   try {
     showError("");

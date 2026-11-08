@@ -32,13 +32,14 @@ test("router times out and fails all pending on death", async () => {
 
 // ---- HTTP command API against a live server with a fake extension ----
 
-const tmpFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sb-cmd-")), "devices.json");
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sb-cmd-"));
+const tmpFile = path.join(tmpDir, "devices.json");
 const { createServer } = require("../server");
 
 let server;
 let port;
 before(async () => {
-  server = createServer({ devicesFile: tmpFile });
+  server = createServer({ devicesFile: tmpFile, auditLog: path.join(tmpDir, "audit.log") });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   port = server.address().port;
 });

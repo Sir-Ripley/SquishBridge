@@ -405,7 +405,8 @@ async function sbStartSession(tabId) {
     throw err;
   }
   await sbAudit("start-session", new URL(tab.url).origin, "ok", "tab " + tabId);
-  // M4: banner injection via chrome.scripting goes here.
+  await sbInjectBanner(tabId);
+  await sbSetBadge(true);
   return mem._session;
 }
 
@@ -416,11 +417,49 @@ async function sbStopSession(reason) {
       await chrome.debugger.detach({ tabId: was.tabId }).catch(() => {});
     }
   } finally {
+    if (Number.isInteger(was.tabId)) await sbRemoveBanner(was.tabId);
     await sbSetSession({ active: false, tabId: null, startedAt: null });
+    await sbSetBadge(false);
     if (mem.driver) mem.driver.reset();
     await sbAudit("stop-session", "", "ok", reason || "user stop");
   }
   return mem._session;
+}
+
+// ---- Safety chrome: banner + badge (M4) ----
+
+async function sbInjectBanner(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content-banner.js"] });
+  } catch (err) {
+    // Without host permission the banner cannot render. Chrome's own
+    // "extension is debugging this browser" infobar still shows while the
+    // debugger is attached, but the gap is recorded loudly.
+    await sbAudit("banner", "", "error", String((err && err.message) || err).slice(0, 200));
+  }
+}
+
+async function sbRemoveBanner(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const el = document.getElementById("squish-bridge-banner");
+        if (el) el.remove();
+      },
+    });
+  } catch {
+    /* tab may be gone; nothing to clean */
+  }
+}
+
+async function sbSetBadge(on) {
+  try {
+    await chrome.action.setBadgeText({ text: on ? "ON" : "" });
+    if (on) await chrome.action.setBadgeBackgroundColor({ color: "#c00" });
+  } catch {
+    /* cosmetic only */
+  }
 }
 
 // ---- Popup message API ----
@@ -470,6 +509,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const host = sbNormalizeHost(msg.origin || "");
         if (!host) throw new Error("enter a valid https origin or hostname");
         if (sbIsDenied("https://" + host + "/")) throw new Error("refused: denylisted origin");
+        // The banner (and only the banner) needs host access: request it at
+        // add time, per the design. Without it the origin cannot be driven
+        // visibly, so the add is refused rather than silently banner-less.
+        let granted = false;
+        try {
+          granted = await chrome.permissions.request({ origins: ["https://" + host + "/*"] });
+        } catch {
+          granted = false;
+        }
+        if (!granted) {
+          await sbAudit("allowlist-add", host, "refused", "host permission denied");
+          throw new Error("permission denied: grant host access so the banner can show on " + host);
+        }
         const list = await sbGetAllowlist();
         if (!sbIsAllowlisted(host, list)) list.push(host);
         await sbStoreSet({ [SB_STORE.ALLOWLIST]: list });
@@ -481,6 +533,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const host = sbNormalizeHost(msg.origin || "");
         const list = (await sbGetAllowlist()).filter((h) => sbNormalizeHost(h) !== host);
         await sbStoreSet({ [SB_STORE.ALLOWLIST]: list });
+        try {
+          await chrome.permissions.remove({ origins: ["https://" + host + "/*"] });
+        } catch {
+          /* permission may not have existed; the list is the source of truth */
+        }
         await sbAudit("allowlist-remove", host, "ok", "");
         sendResponse({ ok: true, allowlist: list });
         break;
@@ -534,6 +591,16 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   const session = await sbGetSession();
   if (session.active && session.tabId === tabId) {
     await sbStopSession("shared tab closed");
+  }
+});
+
+// Navigations wipe injected content: re-draw the banner whenever the shared
+// tab finishes loading while a session is active.
+chrome.tabs.onUpdated.addListener(async (tabId, info) => {
+  if (!info || info.status !== "complete") return;
+  const session = await sbGetSession();
+  if (session.active && session.tabId === tabId) {
+    await sbInjectBanner(tabId);
   }
 });
 

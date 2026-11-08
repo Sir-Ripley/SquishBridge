@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: M3 hands landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); the full v0 command set — eyes plus `click`, `type`/`fill`, `press_key`, `scroll`, `wait_for` — is implemented and tested. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M4 safety hardening (banner, allowlist UI enforcement, audit viewer). Note: real-tab driving is code-verified with a stubbed `chrome` API — first live run happens on Rodney's machine after he reloads the extension.
+> **Status: M4 safety hardening landed.** The full design is written and approved ([`docs/DESIGN.md`](docs/DESIGN.md)); every command is gated by the allowlist/denylist, drive time is bannered and badged, STOP works from the popup, the shortcut, and the page, and both audit logs are inspectable (popup viewer + download, bridge `GET /v1/audit`). The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). Next: M5 acceptance missions on Rodney's machine.
 
 ## Why
 
