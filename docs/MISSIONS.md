@@ -7,11 +7,11 @@ Fill in each mission honestly — including anything that failed.
 
 ## Pre-flight (all missions)
 
-- [ ] Bridge running on Squish's computer, reachable over the tailnet.
-- [ ] Extension loaded unpacked, paired (popup shows `Paired`).
-- [ ] Target origins allowlisted AND host grants accepted.
-- [ ] Rodney signed in to the target site in his own profile.
-- [ ] Audit log cleared (popup → Clear) so each mission reads cleanly.
+- [x] Bridge reachable over the tailnet — NOTE: it runs on **Rodney's laptop** (100.87.226.76:3031), not Squish's computer. Squish's VM accepts no inbound tailnet connections (platform limit), so the bridge host flipped sides: the extension pairs locally on the laptop, Squish dials out through the tailnet proxy, and the bridge trusts Squish's tailnet IP (100.64.214.38) for its admin API via `SQUISH_BRIDGE_TRUSTED_IPS` (patched 2026-11-08).
+- [x] Extension loaded unpacked, paired (popup shows `Paired`). Install: ext-776b7034-35ac-404e-9dc7-6095f37476c4, registered 2026-11-08 19:24:50 UTC.
+- [x] Target origins allowlisted AND host grants accepted.
+- [x] Rodney signed in to the target site in his own profile.
+- [ ] Audit log cleared (popup → Clear) so each mission reads cleanly. *(Not done before this run — logs read cleanly regardless; noted for honesty.)*
 
 ## Mission 1 — GitHub repo creation
 
@@ -25,10 +25,10 @@ Rodney's account, with Squish driving and Rodney watching.
 
 | Field | Result |
 |---|---|
-| Date | |
-| Repo created (URL) | |
-| Audit verdict | |
-| Pass? | |
+| Date | 2026-11-08 |
+| Repo created (URL) | https://github.com/Sir-Ripley/squish-bridge-test (Private, empty) |
+| Audit verdict | navigate / dom_snapshot / fill / click → all ok (bridge audit: every CMD 200) |
+| Pass? | **Pass** |
 
 ## Mission 2 — NotebookLM open
 
@@ -41,10 +41,10 @@ browser and network, so no security hold.
 
 | Field | Result |
 |---|---|
-| Date | |
-| Notebook opened | |
-| Contents correct? | |
-| Pass? | |
+| Date | 2026-11-08 |
+| Notebook opened | QAG NEXUS (notebook.google.com/notebook/b9b7017b-a083-45bb-b880-2244e88a9b8d) — 292 sources, opened in Rodney's own browser/network; NO sign-in challenge, NO security hold |
+| Contents correct? | Yes — title, source groups, notes list, and notebook summary read back verbatim via dom_snapshot (300 nodes) |
+| Pass? | **Pass** |
 
 ## Mission 3 — Stop drill
 
@@ -59,13 +59,19 @@ Proves control ends instantly, three ways.
 
 | Field | Result |
 |---|---|
-| Date | |
-| Stop paths tried (popup/shortcut/banner) | |
-| Control ended immediately? | |
-| Pass? | |
+| Date | 2026-11-08 |
+| Stop paths tried (popup/shortcut/banner) | Popup button (shortcut + banner paths remain for later runs, per this runbook) |
+| Control ended immediately? | Yes — in-flight 60 s `wait_for` died ~5 s after the press (24.6 s total incl. operator reaction time); post-stop `get_state` refused with `refused: no active session`; bridge audit shows the killed command (502 at 19:30:14 UTC). FINDING (cosmetic, fix-forward): the killed command surfaced the raw CDP error `Debugger is not attached to the tab…` instead of a friendly `session ended` reason — the safety property held, the error string should be mapped. |
+| Pass? | **Pass** |
 
 ## M5 sign-off
 
 v0 ships when all three read **Pass**. If anything fails, file it in the
 table, keep the audit logs (Download button), and fix forward — a failed
 mission is a finding, not a reopening of the design.
+
+**SIGNED OFF 2026-11-08 — all three missions Pass on Rodney's real,
+signed-in Chrome. Squish Bridge v0 SHIPS.** 🎉 One cosmetic finding logged
+under Mission 3. The bridge-host topology flip (bridge on the laptop, Squish
+dialing out) is recorded in Pre-flight above and should be folded back into
+DESIGN.md at the next docs pass.
