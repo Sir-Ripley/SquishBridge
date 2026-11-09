@@ -1,6 +1,7 @@
 node_modules/
 bridge/audit.log.jsonl
 bridge/devices.json
+bridge/bridge.pid
 bridge/*.tmp
 *.log
 .DS_Store/

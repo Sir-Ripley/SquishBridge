@@ -33,13 +33,24 @@ no store, no account needed.
 
 ```
 cd bridge
-npm install   # once; installs the single dependency (ws)
-npm start     # serves http://127.0.0.1:3031, or the tailnet IP via SQUISH_BRIDGE_HOST
+npm install                                        # once; installs the single dependency (ws)
+powershell -ExecutionPolicy Bypass -File ..\tools\bridge.ps1 start    # runs in the background
 ```
 
-On startup the bridge prints the `ws://…:3031` addresses it is reachable
-at — hand the tailnet one to Squish so it can dial in from its side
-(`GET /v1/status` reports them too, as `addrs`).
+That prints the `ws://…:3031` addresses — hand the tailnet one to Squish
+so it can dial in from its side. `bridge.ps1 status` reprints them any
+time (`GET /v1/status` reports them too, as `addrs`); `bridge.ps1 stop`
+ends it. Prefer a foreground terminal? `npm start` in `bridge/` instead —
+same server, dies with the window.
+
+No address configuration is needed: since v0.5 the bridge listens on all
+interfaces out of the box (loopback for the extension, tailnet/LAN for
+the agent). Reachability is not access — minting codes and submitting
+commands still require a trusted source: loopback plus your whole tailnet
+range `100.64.0.0/10` (agent IPs rotate; tailnet membership is the real
+boundary). Tighten with `SQUISH_BRIDGE_TRUST_TAILNET=0` (explicit
+`SQUISH_BRIDGE_TRUSTED_IPS` only) or `SQUISH_BRIDGE_HOST=127.0.0.1`
+(loopback only, agent locked out).
 
 ## 5. Pair (once per browser)
 
@@ -89,7 +100,10 @@ Two more v0.4 behaviors worth knowing:
 
 | Symptom | Cause → fix |
 |---|---|
-| Pair fails "cannot reach bridge" | Wrong address/port, or bridge not running → check `npm start` and the tailnet IP. |
+| Pair fails "cannot reach bridge" | Wrong address/port, or bridge not running → `tools/bridge.ps1 status`; start it if down. |
+| "port 3031 is busy" on start | A bridge is already running → `tools/bridge.ps1 stop` first, or set `SQUISH_BRIDGE_PORT`. |
+| Windows Firewall prompt for Node.js | First tailnet/LAN listen → Allow (private networks at least) or Squish can't dial in. |
+| Squish gets 403 from the bridge API | Its IP isn't trusted → it must dial from your tailnet (range `100.64.0.0/10` trusted by default); check `tailscale status`. |
 | "pairing refused: code-expired / unknown-or-spent" | Code older than 10 min or already used → ask Squish for a fresh one. |
 | Allowlist add "permission denied" | Host grant declined → re-add and Accept so the banner can show. |
 | Banner missing but session active | Host permission revoked → re-add the origin; the debugger infobar still shows control meanwhile. |

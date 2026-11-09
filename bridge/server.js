@@ -21,7 +21,15 @@ const pairing = require("./lib/pairing");
 const { createRouter } = require("./lib/router");
 
 const VERSION = require("./package.json").version;
-const HOST = process.env.SQUISH_BRIDGE_HOST || "127.0.0.1";
+// Bind everywhere by default: the extension pairs over loopback while the
+// agent dials in over the tailnet, and one default must serve both. The
+// admin API stays gated by isTrusted below, so reachability is not access.
+// Lock down with SQUISH_BRIDGE_HOST=127.0.0.1 when the agent needs no entry.
+function resolveHost() {
+  const h = (process.env.SQUISH_BRIDGE_HOST || "").trim();
+  return h || "0.0.0.0";
+}
+const HOST = resolveHost();
 const PORT = Number(process.env.SQUISH_BRIDGE_PORT) || 3031;
 // Mutable so tests can point a server at a scratch log; production runs one
 // server per process, so this is never shared.
@@ -35,9 +43,13 @@ const HEARTBEAT_MS = 25 * 1000;
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
-// Extra loopback-exempt source(s): the agent's tailnet IP, so Squish can mint
+// Extra loopback-exempt source(s): explicit tailnet IPs, so Squish can mint
 // codes and drive commands over the tailnet while the public internet stays
 // refused. Comma-separated override: SQUISH_BRIDGE_TRUSTED_IPS="100.x.y.z".
+// On top of that, the whole tailnet range 100.64.0.0/10 is trusted by
+// default — on this machine only Tailscale uses that range, tailnet
+// membership is the real boundary, and agent IPs rotate. Disable with
+// SQUISH_BRIDGE_TRUST_TAILNET=0 to fall back to explicit IPs only.
 const TRUSTED_SOURCES = new Set(
   (process.env.SQUISH_BRIDGE_TRUSTED_IPS || "100.64.214.38")
     .split(",")
@@ -51,6 +63,19 @@ function normalizeAddr(addr) {
   return addr;
 }
 
+function tailnetTrustEnabled() {
+  const v = (process.env.SQUISH_BRIDGE_TRUST_TAILNET || "").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "no";
+}
+
+function isTailnetAddr(addr) {
+  const parts = normalizeAddr(addr || "").split(".");
+  if (parts.length !== 4) return false;
+  const nums = parts.map((p) => (/^\d{1,3}$/.test(p) ? Number(p) : -1));
+  if (nums.some((n) => n < 0 || n > 255)) return false;
+  return nums[0] === 100 && nums[1] >= 64 && nums[1] <= 127;
+}
+
 function isLoopback(req) {
   return LOOPBACK.has(req.socket && req.socket.remoteAddress);
 }
@@ -59,7 +84,9 @@ function isTrusted(req) {
   const addr = req.socket && req.socket.remoteAddress;
   if (!addr) return false;
   if (LOOPBACK.has(addr)) return true;
-  return TRUSTED_SOURCES.has(normalizeAddr(addr));
+  const peer = normalizeAddr(addr);
+  if (TRUSTED_SOURCES.has(peer)) return true;
+  return tailnetTrustEnabled() && isTailnetAddr(peer);
 }
 
 // Non-loopback IPv4 addresses (tailnet, LAN) so the operator can see at a
@@ -461,11 +488,39 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
 
 if (require.main === module) {
   const server = createServer();
+  server.on("error", (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      console.error(
+        `port ${PORT} is busy — another bridge is already running. Stop it first (tools/bridge.ps1 stop) or pick another port with SQUISH_BRIDGE_PORT.`
+      );
+      process.exit(1);
+    }
+    console.error(`bridge failed to listen on ${HOST}:${PORT}: ${(err && err.message) || err}`);
+    process.exit(1);
+  });
   server.listen(PORT, HOST, () => {
-    console.log(`squish-bridge v${VERSION} listening on http://${HOST}:${PORT} (pairing ready)`);
+    const scope = HOST === "0.0.0.0" ? "all interfaces (loopback + tailnet/LAN)" : HOST;
+    console.log(`squish-bridge v${VERSION} listening on port ${PORT} via ${scope} (pairing ready)`);
     const addrs = lanAddrs();
-    if (addrs.length) console.log(`reachable at: ${addrs.map((a) => `ws://${a}:${PORT}`).join(", ")}`);
+    console.log(`extension pairs at: ws://127.0.0.1:${PORT}`);
+    if (addrs.length) {
+      console.log(`agent dials at: ${addrs.map((a) => `ws://${a}:${PORT}`).join(", ")}`);
+    }
+    const trust = ["loopback"];
+    if (tailnetTrustEnabled()) trust.push("tailnet range 100.64.0.0/10");
+    for (const ip of TRUSTED_SOURCES) trust.push(ip);
+    console.log(`admin API trusts: ${trust.join(" + ")}`);
   });
 }
 
-module.exports = { createServer, VERSION, isTrusted, isLoopback, TRUSTED_SOURCES, lanAddrs };
+module.exports = {
+  createServer,
+  VERSION,
+  isTrusted,
+  isLoopback,
+  isTailnetAddr,
+  tailnetTrustEnabled,
+  resolveHost,
+  TRUSTED_SOURCES,
+  lanAddrs,
+};

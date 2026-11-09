@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: v0 shipped — all three M5 missions Pass on Rodney's signed-in Chrome (2026-11-08).** v0.4 is full control-as-you: hover, reload/back/forward, page PDF, user-named file uploads, right/double-click, key chords, full-page shots, popup auto-follow, and owner-approved audited page JS (`evaluate`) — on top of v0.3's **Open Mode**, `list_tabs`, and Supabase (63 unit tests green). Missions: [`docs/MISSIONS.md`](docs/MISSIONS.md); protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install: [`docs/INSTALL.md`](docs/INSTALL.md). Sharing is one button: **Connect & Share**.
+> **Status: v0 shipped — all three M5 missions Pass on Rodney's signed-in Chrome (2026-11-08).** v0.4 is full control-as-you: hover, reload/back/forward, page PDF, user-named file uploads, right/double-click, key chords, full-page shots, popup auto-follow, and owner-approved audited page JS (`evaluate`) — on top of v0.3's **Open Mode**, `list_tabs`, and Supabase (66 unit tests green). Missions: [`docs/MISSIONS.md`](docs/MISSIONS.md); protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install: [`docs/INSTALL.md`](docs/INSTALL.md). Sharing is one button: **Connect & Share**. v0.5 hardens the connection: bind-all default (no address config), tailnet-range trust, friendly port-busy errors, and `tools/bridge.ps1` to run the bridge in the background.
 
 ## Why
 
@@ -58,7 +58,7 @@ npm start   # serves http://127.0.0.1:3031 (loopback-only)
 All checks (no Chrome needed):
 
 ```
-node --test extension/test/*.test.js bridge/test/*.test.js  # 63 unit tests
+node --test extension/test/*.test.js bridge/test/*.test.js  # 66 unit tests
 node tools/validate.js                                      # install readiness
 ```
 
