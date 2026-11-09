@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: v0 shipped — all three M5 missions Pass on Rodney's signed-in Chrome (2026-11-08).** v0.3 adds one-click **Share this site**, an off-by-default **Open Mode** for sharing any site, agent tab discovery (`list_tabs`), and Supabase on the allowlist (52 unit tests green). Missions runbook: [`docs/MISSIONS.md`](docs/MISSIONS.md); wire protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install: [`docs/INSTALL.md`](docs/INSTALL.md).
+> **Status: v0 shipped — all three M5 missions Pass on Rodney's signed-in Chrome (2026-11-08).** v0.4 is full control-as-you: hover, reload/back/forward, page PDF, user-named file uploads, right/double-click, key chords, full-page shots, popup auto-follow, and owner-approved audited page JS (`evaluate`) — on top of v0.3's one-click **Share this site**, **Open Mode**, `list_tabs`, and Supabase (62 unit tests green). Missions: [`docs/MISSIONS.md`](docs/MISSIONS.md); protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Why
 
@@ -58,7 +58,7 @@ npm start   # serves http://127.0.0.1:3031 (loopback-only)
 All checks (no Chrome needed):
 
 ```
-node --test extension/test/*.test.js bridge/test/*.test.js  # 52 unit tests
+node --test extension/test/*.test.js bridge/test/*.test.js  # 62 unit tests
 node tools/validate.js                                      # install readiness
 ```
 

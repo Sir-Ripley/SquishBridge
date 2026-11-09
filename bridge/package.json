@@ -1,6 +1,6 @@
 {
   "name": "squish-bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Bridge server for Squish Bridge: pairs the Chrome extension to the agent over an outbound socket, routes commands, keeps an audit log.",
   "type": "commonjs",
   "license": "MPL-2.0",

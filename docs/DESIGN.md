@@ -100,14 +100,19 @@ All commands act **only on the shared tab**, are **JSON messages** over the sock
 | `scroll` | `Input.dispatchMouseEvent` (wheel) / `Page` | |
 | `get_state` | `tabs` API + `Page.getNavigationHistory` | Current URL, title, load state. |
 | `wait_for` | polling `dom_snapshot` | Wait until an element/text appears or a timeout hits. |
+| `hover` | `Input.dispatchMouseEvent` | v0.4: mouse move without press (menus, tooltips). |
+| `reload` / `back` / `forward` | `Page` | v0.4: navigation controls; empty history errors loudly. |
+| `pdf` | `Page.printToPDF` | v0.4: page printout returned as base64. |
+| `upload_file` | `DOM.setFileInputFiles` | v0.4: sets a file input to a user-named local path; the agent cannot browse the disk. |
+| `evaluate` | `Runtime.evaluate` | v0.4, owner-approved: audited page JS (see the note below this table). |
 
-**Deliberately excluded from v0:** arbitrary JavaScript evaluation (`Runtime.evaluate` / `scripting.executeScript` with free-form code). CDP input + navigation covers the mission set without handing the bridge a general code-execution channel. Revisit only with a specific need and Rodney's explicit approval.
+**Deliberately excluded from v0, revisited in v0.4 with Rodney's explicit approval (2026-11-09):** page JavaScript arrives ONLY through the audited `evaluate` command — expression cap (20k chars), return-by-value cap (100k), no user gesture, page exceptions mapped to errors, and every call audit-logged WITH its expression (success and failure). Free-form `scripting.executeScript` stays excluded. Honest tradeoff, recorded here: `evaluate` runs with the page's own privileges, so it can read whatever page scripts can and return it — fenced as above, and the extension itself still holds no credential-adjacent permission.
 
 ## 6. Safety model
 
 ### 6.1 Session control
 - Control exists only inside an explicit session: Rodney picks the tab and presses **Start**; the popup and the on-page banner show the active state continuously; **Stop** (popup button, and a keyboard shortcut) detaches the debugger and ends the session immediately.
-- One shared tab at a time in v0. Switching tabs requires a new explicit share.
+- One shared tab at a time in v0. Switching tabs requires a new explicit share — except tabs the shared page opens itself (OAuth popups, `target=_blank` links), which the session auto-follows from v0.4: still one tab, still policy-gated, always audit-logged (`follow-tab`). A child that fails the gate is left alone for explicit sharing.
 
 ### 6.2 Allowlist
 - The extension holds an origin allowlist, editable only from the popup by Rodney. Commands whose target origin is not on the list are **refused by the extension** and logged.

@@ -51,6 +51,22 @@ touch disk, and `GET /v1/devices` never exposes hashes.
 | `get_state` | `{}` | `{ url, title, loading }` | M2 |
 | `wait_for` | `{ text?, ref?, timeoutMs? }` | `{ found }` | M3: polls snapshots every 500 ms (default 10 s, max 60 s); timeout is an error. |
 | `list_tabs` | `{}` | `{ tabs: [{ tabId, title, origin, shared, drivable }] }` | v0.3: needs NO active session (that is the point — discover tabs, then ask the user to share one). Metadata only: origins, never full URLs. Never attaches the debugger. |
+| `hover` | `{ ref }` or `{ x, y }` | `{ hovered }` | v0.4: moves the mouse without pressing (menus, tooltips). |
+| `reload` | `{ ignoreCache? }` | `{ reloaded }` | v0.4 |
+| `back` / `forward` | `{}` | `{ navigated }` | v0.4: history walk; empty history is an error, not silent. |
+| `pdf` | `{}` | `{ pdfBase64 }` | v0.4: prints the page (background graphics on). |
+| `upload_file` | `{ ref, path }` | `{ uploaded, file }` | v0.4: sets a form's file input to a user-named local path (`C:\…`). The agent cannot browse the disk — the user names the file in chat. The filename is audit-logged. |
+| `evaluate` | `{ expression, awaitPromise? }` | `{ value }` | v0.4, approved 2026-11-09: runs JS in page context. Expression cap 20k chars, return-by-value cap 100k chars, page exceptions mapped to errors, `undefined` comes back `null`. Every call is audit-logged WITH its expression. |
+
+v0.4 extensions to older commands: `click` takes `{ button: left\|middle\|right, clickCount: 1-3 }`; `press_key` takes `{ alt?, ctrl?, meta?, shift? }` for chords (`Ctrl+C`); `screenshot` takes `{ fullPage? }`.
+
+> `evaluate` runs with the page's own privileges: it can read whatever page
+> scripts can (DOM, page storage, non-httpOnly cookies) and hand it back as
+> its return value. That is a deliberate, owner-approved widening of the v0
+> "no page code" rule — fenced by the expression/result caps, the ban on
+> user gestures, and the always-logged expression. It still cannot touch
+> `httpOnly` cookies, passwords, or passkeys, and the extension itself keeps
+> no credential-adjacent permission.
 
 ## Sharing upgrades (v0.3)
 
@@ -62,8 +78,8 @@ touch disk, and `GET /v1/devices` never exposes hashes.
   denylist, the https rule, the per-site banner grant, the banner/badge/STOP,
   and the audit log all still apply. The toggle itself is audit-logged.
 
-Deliberately excluded from v0: arbitrary JavaScript evaluation
-(`Runtime.evaluate`, free-form `scripting.executeScript`). See DESIGN §5.
+Still excluded: free-form `scripting.executeScript`. Page JS arrives only
+through the audited `evaluate` command above — never as injected scripts.
 
 ## Safety order (extension-enforced, before any CDP runs)
 

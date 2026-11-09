@@ -116,7 +116,6 @@ if (manifest) {
 // ---- Forbidden APIs in shipped (non-test) extension code ----
 
 const FORBIDDEN_CODE = [
-  "Runtime.evaluate",
   "localStorage",
   "XMLHttpRequest",
   "chrome.cookies",
@@ -139,6 +138,20 @@ for (const f of jsFiles(EXT)) {
   for (const bad of FORBIDDEN_CODE) {
     check(!src.includes(bad), `no ${bad} in ${rel}`);
   }
+}
+
+// Page JS exists only by Rodney's explicit approval (2026-11-09): the
+// audited driver path in lib/cdp.js is the one place Runtime.evaluate may
+// appear, so a stray eval channel can never slip in elsewhere.
+{
+  const users = jsFiles(EXT)
+    .filter((f) => read(f).includes("Runtime.evaluate"))
+    .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"));
+  check(
+    users.length === 1 && users[0] === "extension/lib/cdp.js",
+    "Runtime.evaluate only in extension/lib/cdp.js (audited driver path)",
+    JSON.stringify(users)
+  );
 }
 
 // ---- Bridge ----

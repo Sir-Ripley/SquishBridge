@@ -34,7 +34,9 @@ function renderStatus(s) {
   $("pairInfo").textContent = paired
     ? `Paired as ${p.installId} to ${p.bridgeUrl}.`
     : `This browser: ${p.installId || "?"}. Not paired.`;
-  if (p.bridgeUrl && !$("bridgeUrl").value) $("bridgeUrl").value = p.bridgeUrl;
+  // The bridge runs on this laptop now (topology flip), so pair locally
+  // out of the box; a previous pairing's address still wins when present.
+  if (!$("bridgeUrl").value) $("bridgeUrl").value = p.bridgeUrl || "ws://127.0.0.1:3031";
   $("pair").disabled = paired;
   $("unpair").disabled = !paired;
 }

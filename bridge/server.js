@@ -12,6 +12,7 @@
  */
 
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const { WebSocketServer } = require("ws");
 const audit = require("./lib/audit");
@@ -59,6 +60,19 @@ function isTrusted(req) {
   if (!addr) return false;
   if (LOOPBACK.has(addr)) return true;
   return TRUSTED_SOURCES.has(normalizeAddr(addr));
+}
+
+// Non-loopback IPv4 addresses (tailnet, LAN) so the operator can see at a
+// glance where the agent should dial. Loopback is always there; this lists
+// the rest.
+function lanAddrs() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni && ni.family === "IPv4" && !ni.internal && ni.address) out.push(ni.address);
+    }
+  }
+  return [...new Set(out)];
 }
 
 function sendJson(res, req, status, body, origin) {
@@ -170,6 +184,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
             connected: live,
             pendingCodes: pairing.pendingCount(store),
             pendingCommands: [...routers.values()].reduce((n, r) => n + r.pendingCount(), 0),
+            addrs: lanAddrs(),
           },
           origin
         );
@@ -448,7 +463,9 @@ if (require.main === module) {
   const server = createServer();
   server.listen(PORT, HOST, () => {
     console.log(`squish-bridge v${VERSION} listening on http://${HOST}:${PORT} (pairing ready)`);
+    const addrs = lanAddrs();
+    if (addrs.length) console.log(`reachable at: ${addrs.map((a) => `ws://${a}:${PORT}`).join(", ")}`);
   });
 }
 
-module.exports = { createServer, VERSION, isTrusted, isLoopback, TRUSTED_SOURCES };
+module.exports = { createServer, VERSION, isTrusted, isLoopback, TRUSTED_SOURCES, lanAddrs };

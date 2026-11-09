@@ -29,7 +29,7 @@ references, permission set, forbidden-API sweep, and artifact check all pass.
 After `git pull`, click the extension card's reload button. No reinstall,
 no store, no account needed.
 
-## 4. Start the bridge (Squish's computer)
+## 4. Start the bridge (this laptop)
 
 ```
 cd bridge
@@ -37,11 +37,16 @@ npm install   # once; installs the single dependency (ws)
 npm start     # serves http://127.0.0.1:3031, or the tailnet IP via SQUISH_BRIDGE_HOST
 ```
 
+On startup the bridge prints the `ws://…:3031` addresses it is reachable
+at — hand the tailnet one to Squish so it can dial in from its side
+(`GET /v1/status` reports them too, as `addrs`).
+
 ## 5. Pair (once per browser)
 
 1. Squish mints a one-time code: `POST /v1/pair/code` (10-minute life).
-2. Open the popup, enter the bridge address (`ws://<tailnet-ip>:3031`)
-   and the code, click **Pair**.
+2. Open the popup — the bridge address is prefilled with
+   `ws://127.0.0.1:3031` (the bridge runs on this laptop). Enter the code,
+   click **Pair**.
 3. Chrome asks for host access per origin as you add allowlist entries —
    grant it, or the safety banner cannot render and the add is refused.
 4. The popup shows `Paired`. Reloading or restarting keeps the pairing;
@@ -66,6 +71,16 @@ Want zero setup per site? Tick **Open Mode** in the popup: any `https://`
 page except denylisted ones (banks, password managers) becomes shareable
 immediately. The per-site banner grant, banner/badge/STOP, and audit log
 still apply — Open Mode skips only the allowlist step.
+
+Two more v0.4 behaviors worth knowing:
+
+- **Popups are followed.** When the shared page opens a tab itself (OAuth
+  login, `target=_blank` docs), the session moves to it automatically —
+  still one tab, still policy-gated, logged as `follow-tab`. A popup that
+  fails the gate stays unshared; share it explicitly if you want it driven.
+- **Uploads are user-named.** To put a file into a form, name its local path
+  in chat (`upload C:\invoices\q3.pdf`) and Squish sets it on the file
+  input. The agent cannot browse your disk — only paths you utter.
 
 ## Troubleshooting
 

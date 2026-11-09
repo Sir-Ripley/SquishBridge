@@ -101,6 +101,19 @@ async function sbAudit(command, targetOrigin, status, detail) {
   return log;
 }
 
+// The two commands whose WHAT matters as much as their outcome: page JS
+// gets its expression logged, uploads get their filename. Everything else
+// audits with an empty detail, as before.
+function sbAuditDetailFor(msg, result) {
+  if (msg.type === "evaluate") {
+    return "expr " + String((msg.payload && msg.payload.expression) || "").slice(0, 200);
+  }
+  if (msg.type === "upload_file") {
+    return "file " + String((result && result.file) || "").slice(0, 200);
+  }
+  return "";
+}
+
 // ---- Pairing (real in M1) ----
 
 async function sbGetInstallId() {
@@ -166,7 +179,12 @@ async function sbOnSocketMessage(ev, pairing) {
   try {
     const result = await sbExecuteCommand(msg.type, msg.payload || {});
     reply = { id: msg.id, ok: true, result };
-    await sbAudit(msg.type, result && result.url ? new URL(result.url).origin : "", "ok", "");
+    await sbAudit(
+      msg.type,
+      result && result.url ? new URL(result.url).origin : "",
+      "ok",
+      sbAuditDetailFor(msg, result)
+    );
   } catch (err) {
     let message = String((err && err.message) || err);
     if (/not attached/i.test(message)) {
@@ -176,7 +194,13 @@ async function sbOnSocketMessage(ev, pairing) {
       if (!s || !s.active) message = "refused: session ended";
     }
     reply = { id: msg.id, ok: false, error: message };
-    await sbAudit(msg.type, "", message.startsWith("refused") ? "refused" : "error", message.slice(0, 200));
+    const context = msg.type === "evaluate" ? sbAuditDetailFor(msg, null) + " | " : "";
+    await sbAudit(
+      msg.type,
+      "",
+      message.startsWith("refused") ? "refused" : "error",
+      (context + message).slice(0, 200)
+    );
   }
   try {
     mem.socket.send(JSON.stringify(reply));
@@ -682,6 +706,48 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   const session = await sbGetSession();
   if (session.active && session.tabId === tabId) {
     await sbStopSession("shared tab closed");
+  }
+});
+
+// Follow tabs the shared page opens itself (OAuth popups, target=_blank
+// docs links): still exactly one tab at a time, still policy-gated. A child
+// that fails the gate is left alone and logged — the agent sees it via
+// list_tabs and the user can share it explicitly.
+chrome.tabs.onCreated.addListener(async (tab) => {
+  try {
+    const session = await sbGetSession();
+    if (!session.active || !Number.isInteger(session.tabId)) return;
+    if (!tab || tab.openerTabId !== session.tabId || !Number.isInteger(tab.id)) return;
+    let url = tab.url || "";
+    if (!url) {
+      // Fresh tabs often report no URL until the navigation commits.
+      await new Promise((r) => setTimeout(r, 1500));
+      const fresh = await chrome.tabs.get(tab.id).catch(() => null);
+      url = (fresh && fresh.url) || "";
+    }
+    const { allowlist, opts } = await sbGetPolicy();
+    const check = sbCheckUrl(url, allowlist, opts);
+    if (!check.ok) {
+      await sbAudit("follow-tab", url, "refused", check.reason + " (tab " + tab.id + ")");
+      return;
+    }
+    const from = session.tabId;
+    await chrome.debugger.detach({ tabId: from }).catch(() => {});
+    await sbRemoveBanner(from);
+    if (mem.driver) mem.driver.reset();
+    await sbSetSession({ active: true, tabId: tab.id, startedAt: session.startedAt });
+    try {
+      await sbDriver().attachForSession(tab.id);
+    } catch (err) {
+      await sbAudit("follow-tab", url, "error", String((err && err.message) || err).slice(0, 200));
+      await sbStopSession("follow-tab attach failed");
+      return;
+    }
+    await sbInjectBanner(tab.id);
+    await sbSetBadge(true);
+    await sbAudit("follow-tab", new URL(url).origin, "ok", "tab " + from + " -> " + tab.id);
+  } catch {
+    // Never break tab creation: worst case the new tab stays unshared.
   }
 });
 

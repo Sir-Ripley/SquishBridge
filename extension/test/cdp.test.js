@@ -333,6 +333,144 @@ test("open mode lets commands run off-allowlist but never off-denylist", async (
   );
 });
 
+test("click accepts button and clickCount; garbage refuses", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("click", { ref: "1", button: "right", clickCount: 2 }), { clicked: true });
+  const pressed = chrome.calls.filter((c) => c[0] === "Input.dispatchMouseEvent");
+  assert.deepEqual(pressed.map((c) => c[1].button), ["right", "right"]);
+  assert.deepEqual(pressed.map((c) => c[1].clickCount), [2, 2]);
+  await assert.rejects(d.execute("click", { ref: "1", button: "sideways" }), /unknown button/);
+  await assert.rejects(d.execute("click", { ref: "1", clickCount: 9 }), /clickCount/);
+});
+
+test("hover moves the mouse without pressing", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("hover", { ref: "1" }), { hovered: true });
+  assert.deepEqual(await d.execute("hover", { x: 5, y: 6 }), { hovered: true });
+  const moves = chrome.calls.filter((c) => c[0] === "Input.dispatchMouseEvent");
+  assert.deepEqual(moves.map((c) => c[1].type), ["mouseMoved", "mouseMoved"]);
+  assert.deepEqual([moves[0][1].x, moves[0][1].y], [50, 20]);
+  await assert.rejects(d.execute("hover", {}), /needs \{ ref \} or \{ x, y \}/);
+});
+
+test("reload, back, and forward drive history", async () => {
+  const chrome = makeChrome({
+    tab: TAB,
+    methods: {
+      "Page.reload": () => ({}),
+      "Page.getNavigationHistory": () => ({ currentIndex: 1, entries: [{ id: 1 }, { id: 2 }, { id: 3 }] }),
+      "Page.navigateToHistoryEntry": () => ({}),
+    },
+  });
+  const d = driver(chrome, { active: true, tabId: TAB.id });
+  assert.deepEqual(await d.execute("reload", {}), { reloaded: true });
+  assert.deepEqual(await d.execute("back", {}), { navigated: true });
+  assert.deepEqual(await d.execute("forward", {}), { navigated: true });
+  const entries = chrome.calls.filter((c) => c[0] === "Page.navigateToHistoryEntry");
+  assert.deepEqual(entries.map((c) => c[1]), [{ entryId: 1 }, { entryId: 3 }]);
+
+  const single = makeChrome({
+    tab: TAB,
+    methods: { "Page.getNavigationHistory": () => ({ currentIndex: 0, entries: [{ id: 1 }] }) },
+  });
+  const d2 = driver(single, { active: true, tabId: TAB.id });
+  await assert.rejects(d2.execute("back", {}), /no back history/);
+  await assert.rejects(d2.execute("forward", {}), /no forward history/);
+});
+
+test("pdf prints the page; empty prints raise", async () => {
+  const good = makeChrome({ tab: TAB, methods: { "Page.printToPDF": () => ({ data: "cGRm" }) } });
+  assert.deepEqual(await driver(good, { active: true, tabId: TAB.id }).execute("pdf", {}), {
+    pdfBase64: "cGRm",
+  });
+  assert.deepEqual(good.calls.filter((c) => c[0] === "Page.printToPDF")[0][1], { printBackground: true });
+  const bad = makeChrome({ tab: TAB, methods: { "Page.printToPDF": () => ({}) } });
+  await assert.rejects(driver(bad, { active: true, tabId: TAB.id }).execute("pdf", {}), /empty pdf/);
+});
+
+test("screenshot fullPage captures beyond the viewport", async () => {
+  const chrome = makeChrome({ tab: TAB, methods: { "Page.captureScreenshot": () => ({ data: "eA==" }) } });
+  const d = driver(chrome, { active: true, tabId: TAB.id });
+  await d.execute("screenshot", { fullPage: true });
+  const shots = chrome.calls.filter((c) => c[0] === "Page.captureScreenshot");
+  assert.deepEqual(shots[0][1], { format: "png", captureBeyondViewport: true });
+});
+
+test("press_key passes modifiers for chords", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("press_key", { key: "c", ctrl: true }), { pressed: true });
+  const keys = chrome.calls.filter((c) => c[0] === "Input.dispatchKeyEvent");
+  assert.equal(keys[0][1].modifiers, 2);
+  assert.equal(keys[0][1].windowsVirtualKeyCode, 67);
+  assert.deepEqual(await d.execute("press_key", { key: "Enter", shift: true }), { pressed: true });
+  const again = chrome.calls.filter((c) => c[0] === "Input.dispatchKeyEvent");
+  assert.equal(again[2][1].modifiers, 8);
+});
+
+test("upload_file sets the file input to a user-named local path", async () => {
+  const chrome = handsChrome({ "DOM.setFileInputFiles": () => ({}) });
+  const d = await handsDriver(chrome);
+  assert.deepEqual(await d.execute("upload_file", { ref: "2", path: "C:\\Users\\rodney\\report.pdf" }), {
+    uploaded: true,
+    file: "report.pdf",
+  });
+  const set = chrome.calls.filter((c) => c[0] === "DOM.setFileInputFiles");
+  assert.equal(set.length, 1);
+  assert.deepEqual(set[0][1].files, ["C:\\Users\\rodney\\report.pdf"]);
+  assert.ok(set[0][1].objectId, "targets the resolved input element");
+  await assert.rejects(d.execute("upload_file", { ref: "2" }), /needs \{ ref, path \}/);
+  await assert.rejects(d.execute("upload_file", { ref: "99", path: "x" }), /unknown-ref/);
+});
+
+test("evaluate returns by value and maps undefined to null", async () => {
+  const chrome = makeChrome({
+    tab: TAB,
+    methods: { "Runtime.evaluate": () => ({ result: { type: "string", value: "hi" } }) },
+  });
+  const d = driver(chrome, { active: true, tabId: TAB.id });
+  assert.deepEqual(await d.execute("evaluate", { expression: "document.title" }), { value: "hi" });
+  const calls = chrome.calls.filter((c) => c[0] === "Runtime.evaluate");
+  assert.deepEqual(calls[0][1], { expression: "document.title", returnByValue: true, awaitPromise: false });
+  await d.execute("evaluate", { expression: "p", awaitPromise: true });
+  assert.equal(chrome.calls.filter((c) => c[0] === "Runtime.evaluate")[1][1].awaitPromise, true);
+  await assert.rejects(d.execute("evaluate", {}), /needs \{ expression \}/);
+  await assert.rejects(d.execute("evaluate", { expression: "  " }), /needs \{ expression \}/);
+
+  const undef = makeChrome({
+    tab: TAB,
+    methods: { "Runtime.evaluate": () => ({ result: { type: "undefined" } }) },
+  });
+  assert.deepEqual(await driver(undef, { active: true, tabId: TAB.id }).execute("evaluate", { expression: "void 0" }), {
+    value: null,
+  });
+});
+
+test("evaluate maps page exceptions and refuses oversized results", async () => {
+  const throwing = makeChrome({
+    tab: TAB,
+    methods: {
+      "Runtime.evaluate": () => ({
+        exceptionDetails: { text: "boom", exception: { description: "Error: boom" } },
+      }),
+    },
+  });
+  await assert.rejects(
+    driver(throwing, { active: true, tabId: TAB.id }).execute("evaluate", { expression: "x" }),
+    /evaluate threw: Error: boom/
+  );
+  const huge = makeChrome({
+    tab: TAB,
+    methods: { "Runtime.evaluate": () => ({ result: { type: "string", value: "x".repeat(200000) } }) },
+  });
+  await assert.rejects(
+    driver(huge, { active: true, tabId: TAB.id }).execute("evaluate", { expression: "x" }),
+    /result too large/
+  );
+});
+
 test("concurrent commands serialize on one debugger session", async () => {
   const order = [];
   const chrome = makeChrome({

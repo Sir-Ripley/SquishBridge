@@ -17,6 +17,14 @@ const M2_EYES = new Set(["navigate", "screenshot", "dom_snapshot", "get_state"])
 // v0.3 share upgrades: read-only tab discovery. Needs no active session —
 // it is how the agent learns which tabs exist before the user shares one.
 const M6_SHARE = new Set(["list_tabs"]);
+// v0.4 full control: navigation, printing, uploads, hover, and page JS.
+// `evaluate` exists only because Rodney explicitly approved it (2026-11-09):
+// it runs in page context, is audit-logged with its expression, returns by
+// value with a size cap, and never gets a user gesture.
+const SB_FULL_CONTROL = new Set(["hover", "reload", "back", "forward", "pdf", "upload_file", "evaluate"]);
+
+const SB_EVAL_MAX_EXPRESSION = 20000;
+const SB_EVAL_MAX_RESULT = 100000;
 
 // windowsVirtualKeyCode for press_key. Single characters bypass this map
 // and travel as keyDown/keyUp with text.
@@ -191,7 +199,7 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
   }
 
   async function execute(type, payload) {
-    if (!M2_EYES.has(type) && !M3_HANDS.has(type) && !M6_SHARE.has(type)) {
+    if (!M2_EYES.has(type) && !M3_HANDS.has(type) && !M6_SHARE.has(type) && !SB_FULL_CONTROL.has(type)) {
       throw new Error("unknown-command: " + type);
     }
     if (type === "list_tabs") return listTabsNow();
@@ -214,7 +222,9 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
           return { url };
         }
         case "screenshot": {
-          const shot = await send(tab.id, "Page.captureScreenshot", { format: "png" });
+          const shotParams = { format: "png" };
+          if (args.fullPage === true) shotParams.captureBeyondViewport = true;
+          const shot = await send(tab.id, "Page.captureScreenshot", shotParams);
           if (!shot || typeof shot.data !== "string") throw new Error("error: empty screenshot");
           return { pngBase64: shot.data };
         }
@@ -233,16 +243,43 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
           } else {
             throw new Error("refused: click needs { ref } or { x, y }");
           }
+          const button = args.button === undefined ? "left" : String(args.button);
+          if (!["left", "middle", "right"].includes(button)) {
+            throw new Error(`refused: unknown button ${button}`);
+          }
+          const clickCount = args.clickCount === undefined ? 1 : Number(args.clickCount);
+          if (!Number.isInteger(clickCount) || clickCount < 1 || clickCount > 3) {
+            throw new Error("refused: clickCount must be 1-3");
+          }
           for (const mouseType of ["mousePressed", "mouseReleased"]) {
             await send(tab.id, "Input.dispatchMouseEvent", {
               type: mouseType,
               x: point.x,
               y: point.y,
-              button: "left",
-              clickCount: 1,
+              button,
+              clickCount,
             });
           }
           return { clicked: true };
+        }
+        case "hover": {
+          let hoverPoint;
+          if (args.ref !== undefined) {
+            const objectId = await resolveRef(tab.id, String(args.ref));
+            await send(tab.id, "DOM.scrollIntoViewIfNeeded", { objectId });
+            const quads = await send(tab.id, "DOM.getContentQuads", { objectId });
+            hoverPoint = quadCenter(quads && quads.quads);
+          } else if (typeof args.x === "number" && typeof args.y === "number") {
+            hoverPoint = { x: args.x, y: args.y };
+          } else {
+            throw new Error("refused: hover needs { ref } or { x, y }");
+          }
+          await send(tab.id, "Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: hoverPoint.x,
+            y: hoverPoint.y,
+          });
+          return { hovered: true };
         }
         case "type":
         case "fill": {
@@ -266,16 +303,37 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
         case "press_key": {
           const key = args.key;
           if (typeof key !== "string" || !key) throw new Error("refused: press_key needs { key }");
-          if (key.length === 1) {
+          // CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+          const modifiers =
+            (args.alt === true ? 1 : 0) +
+            (args.ctrl === true ? 2 : 0) +
+            (args.meta === true ? 4 : 0) +
+            (args.shift === true ? 8 : 0);
+          if (key.length === 1 && modifiers === 0) {
             await send(tab.id, "Input.dispatchKeyEvent", { type: "keyDown", text: key, key });
             await send(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", key });
+          } else if (key.length === 1) {
+            // Chord (Ctrl+C and friends): raw events with the virtual key.
+            const vkey = key.toUpperCase().charCodeAt(0);
+            await send(tab.id, "Input.dispatchKeyEvent", {
+              type: "rawKeyDown",
+              windowsVirtualKeyCode: vkey,
+              key,
+              modifiers,
+            });
+            await send(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", key, modifiers });
           } else if (SB_KEY_CODES[key] !== undefined) {
             await send(tab.id, "Input.dispatchKeyEvent", {
               type: "rawKeyDown",
               windowsVirtualKeyCode: SB_KEY_CODES[key],
               key,
+              ...(modifiers ? { modifiers } : {}),
             });
-            await send(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", key });
+            await send(tab.id, "Input.dispatchKeyEvent", {
+              type: "keyUp",
+              key,
+              ...(modifiers ? { modifiers } : {}),
+            });
           } else {
             throw new Error(`refused: unknown key ${key}`);
           }
@@ -300,6 +358,80 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
             deltaY: args.deltaY === undefined ? 400 : Number(args.deltaY) || 0,
           });
           return { scrolled: true };
+        }
+        case "reload": {
+          await send(tab.id, "Page.reload", args.ignoreCache === true ? { ignoreCache: true } : {});
+          return { reloaded: true };
+        }
+        case "back":
+        case "forward": {
+          const hist = await send(tab.id, "Page.getNavigationHistory", {});
+          const entries = (hist && hist.entries) || [];
+          const idx = hist && Number.isInteger(hist.currentIndex) ? hist.currentIndex : -1;
+          const target = type === "back" ? entries[idx - 1] : entries[idx + 1];
+          if (!target || target.id === undefined) {
+            throw new Error(type === "back" ? "error: no back history" : "error: no forward history");
+          }
+          await send(tab.id, "Page.navigateToHistoryEntry", { entryId: target.id });
+          return { navigated: true };
+        }
+        case "pdf": {
+          const doc = await send(tab.id, "Page.printToPDF", { printBackground: true });
+          if (!doc || typeof doc.data !== "string") throw new Error("error: empty pdf");
+          return { pdfBase64: doc.data };
+        }
+        case "upload_file": {
+          // The agent cannot browse the disk: the user names a local file in
+          // chat ("upload C:\invoices\q3.pdf"), and the agent sets that path
+          // on the form's file input. Chrome reads the file; the page uploads
+          // it on submit, exactly as if the user had picked it.
+          if (args.ref === undefined || typeof args.path !== "string" || !args.path) {
+            throw new Error("refused: upload_file needs { ref, path }");
+          }
+          const objectId = await resolveRef(tab.id, String(args.ref));
+          await send(tab.id, "DOM.setFileInputFiles", { objectId, files: [args.path] });
+          const file = String(args.path).split(/[/\\]/).pop() || args.path;
+          return { uploaded: true, file };
+        }
+        case "evaluate": {
+          // Page JS with Rodney's explicit approval (2026-11-09). Runs in
+          // page context with the page's own privileges — it can read
+          // whatever page scripts can (DOM, page storage, non-httpOnly
+          // cookies). Guardrails: expression cap, no user gesture,
+          // return-by-value with a result cap, and the expression is
+          // audit-logged by the background worker on every call.
+          const expression = args.expression;
+          if (typeof expression !== "string" || !expression.trim()) {
+            throw new Error("refused: evaluate needs { expression }");
+          }
+          if (expression.length > SB_EVAL_MAX_EXPRESSION) {
+            throw new Error("refused: expression too large");
+          }
+          const run = await send(tab.id, "Runtime.evaluate", {
+            expression,
+            returnByValue: true,
+            awaitPromise: args.awaitPromise === true,
+          });
+          if (run && run.exceptionDetails) {
+            const ed = run.exceptionDetails;
+            const why =
+              (ed.exception && ed.exception.description) || ed.text || "exception";
+            throw new Error("error: evaluate threw: " + String(why).slice(0, 500));
+          }
+          let value = run && run.result ? run.result.value : undefined;
+          if (typeof value === "undefined") value = null;
+          let size;
+          try {
+            size = JSON.stringify(value).length;
+          } catch {
+            throw new Error("error: evaluate result not serializable");
+          }
+          if (size > SB_EVAL_MAX_RESULT) {
+            throw new Error(
+              `error: evaluate result too large (${size} chars, cap ${SB_EVAL_MAX_RESULT})`
+            );
+          }
+          return { value };
         }
         case "wait_for": {
           const wantRef = args.ref !== undefined ? String(args.ref) : null;
@@ -340,5 +472,5 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { createDriver, M2_EYES, M3_HANDS, M6_SHARE };
+  module.exports = { createDriver, M2_EYES, M3_HANDS, M6_SHARE, SB_FULL_CONTROL };
 }
