@@ -147,6 +147,9 @@ function sbAdoptSocket(ws, pairing) {
 }
 
 function sbDropSocket() {
+  // Generation bump: any handshake already in flight must stand down
+  // instead of adopting a socket nobody wants anymore (unpair/pair race).
+  mem._connGen = (mem._connGen || 0) + 1;
   if (mem.reconnectTimer) {
     clearTimeout(mem.reconnectTimer);
     mem.reconnectTimer = null;
@@ -179,12 +182,15 @@ async function sbOnSocketMessage(ev, pairing) {
   try {
     const result = await sbExecuteCommand(msg.type, msg.payload || {});
     reply = { id: msg.id, ok: true, result };
-    await sbAudit(
-      msg.type,
-      result && result.url ? new URL(result.url).origin : "",
-      "ok",
-      sbAuditDetailFor(msg, result)
-    );
+    // Origin extraction must never fail a succeeded command: a weird but
+    // harmless result.url degrades to an empty origin, not an error reply.
+    let origin = "";
+    try {
+      origin = result && result.url ? new URL(result.url).origin : "";
+    } catch {
+      origin = "";
+    }
+    await sbAudit(msg.type, origin, "ok", sbAuditDetailFor(msg, result));
   } catch (err) {
     let message = String((err && err.message) || err);
     if (/not attached/i.test(message)) {
@@ -236,8 +242,12 @@ function sbScheduleReconnect(pairing) {
 }
 
 function sbConnectSocket(pairing) {
-  return new Promise((resolve) => {
-    if (mem.socket) return resolve(true);
+  if (mem.socket) return Promise.resolve(true);
+  // One handshake at a time: concurrent callers (popup click + alarm +
+  // worker restart) share the in-flight attempt instead of double-dialing.
+  if (mem._connecting) return mem._connecting;
+  const gen = mem._connGen || 0;
+  mem._connecting = new Promise((resolve) => {
     mem.socketState = "connecting";
     let ws;
     try {
@@ -268,6 +278,16 @@ function sbConnectSocket(pairing) {
         // Auth refused: the bridge will close with 4401; let onclose handle it.
         return;
       }
+      if (gen !== (mem._connGen || 0)) {
+        clearTimeout(authTimer);
+        try {
+          ws.close(1000, "superseded");
+        } catch {
+          /* ignore */
+        }
+        resolve(false);
+        return;
+      }
       clearTimeout(authTimer);
       sbAdoptSocket(ws, pairing);
       await sbAudit("socket", "", "connected", "reconnected");
@@ -283,6 +303,11 @@ function sbConnectSocket(pairing) {
       // onclose follows; nothing to do here.
     };
   });
+  mem._connecting.then(
+    () => { mem._connecting = null; },
+    () => { mem._connecting = null; }
+  );
+  return mem._connecting;
 }
 
 // Pair: open a socket, trade the one-time code for a device token on that
@@ -455,13 +480,15 @@ async function sbStartSession(tabId) {
 
 async function sbStopSession(reason) {
   const was = await sbGetSession();
+  // Mark inactive BEFORE detaching: the detach fires onDetach, which must
+  // see an inactive session and stand down instead of double-stopping.
+  await sbSetSession({ active: false, tabId: null, startedAt: null });
   try {
     if (Number.isInteger(was.tabId)) {
       await chrome.debugger.detach({ tabId: was.tabId }).catch(() => {});
     }
   } finally {
     if (Number.isInteger(was.tabId)) await sbRemoveBanner(was.tabId);
-    await sbSetSession({ active: false, tabId: null, startedAt: null });
     await sbSetBadge(false);
     if (mem.driver) mem.driver.reset();
     await sbAudit("stop-session", "", "ok", reason || "user stop");
@@ -578,8 +605,11 @@ async function sbConnectShare() {
     await sbStoreSet({ [SB_STORE.OPEN_MODE]: true });
     await sbAudit("open-mode", "", "ok", "enabled via connect");
   }
-  await sbEnsureConnection().catch(() => false);
+  // Share first: the banner-grant prompt needs a fresh user gesture, and
+  // the socket dial can take seconds. (The popup usually prefetches the
+  // grant in-click; this ordering keeps the fallback path fresh too.)
   const res = await sbShareSite(null);
+  await sbEnsureConnection().catch(() => false);
   return { ...res, openMode: true, socketState: mem.socketState };
 }
 
@@ -751,10 +781,13 @@ chrome.tabs.onCreated.addListener(async (tab) => {
       return;
     }
     const from = session.tabId;
+    // Point the session at the new tab BEFORE detaching the old one: the
+    // detach fires onDetach, which must see the new tabId and stand down
+    // instead of stopping the session we are moving.
+    await sbSetSession({ active: true, tabId: tab.id, startedAt: session.startedAt });
     await chrome.debugger.detach({ tabId: from }).catch(() => {});
     await sbRemoveBanner(from);
     if (mem.driver) mem.driver.reset();
-    await sbSetSession({ active: true, tabId: tab.id, startedAt: session.startedAt });
     try {
       await sbDriver().attachForSession(tab.id);
     } catch (err) {

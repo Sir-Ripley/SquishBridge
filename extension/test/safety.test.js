@@ -33,6 +33,22 @@ test("denylist wins: banks, password managers, local pages refused", () => {
   assert.ok(!safety.sbIsDenied("https://github.com/octocat"));
 });
 
+test("loopback IPs are denied in every notation, open mode included", () => {
+  for (const h of [
+    "https://127.0.0.1/",
+    "https://127.0.0.1:3031/",
+    "https://127.1/",
+    "https://2130706433/", // 127.0.0.1 as a single decimal int
+    "https://0.0.0.0/",
+    "https://[::1]/",
+  ]) {
+    assert.ok(safety.sbIsDenied(h), h);
+    assert.equal(safety.sbCheckUrl(h, ["github.com"], { openMode: true }).ok, false, h);
+  }
+  assert.ok(!safety.sbIsDenied("https://128.0.0.1/"));
+  assert.ok(!safety.sbIsDenied("https://100.64.0.1/"));
+});
+
 test("open mode skips the allowlist but never the denylist or https rule", () => {
   const open = { openMode: true };
   assert.equal(safety.sbCheckUrl("https://example.com/", safety.SB_INITIAL_ALLOWLIST, open).ok, true);
@@ -89,6 +105,14 @@ test("sbShareRefusalMessage explains unshareable pages in plain words", () => {
     safety.sbShareRefusalMessage("origin not allowlisted", "https://example.com/"),
     "refused: origin not allowlisted"
   );
+});
+
+test("sbGrantTargetForTab picks the grant host or bails", () => {
+  assert.equal(safety.sbGrantTargetForTab("https://supabase.com/dashboard"), "supabase.com");
+  assert.equal(safety.sbGrantTargetForTab("https://APP.supabase.com:443/x"), "app.supabase.com");
+  for (const u of ["chrome://extensions/", "about:blank", "", null, "http://example.com/", "https://chase.com/"]) {
+    assert.equal(safety.sbGrantTargetForTab(u), null, String(u));
+  }
 });
 
 test("sbCheckUrl enforces https + denylist + allowlist, in that order", () => {

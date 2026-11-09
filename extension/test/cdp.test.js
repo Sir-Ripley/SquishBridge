@@ -360,7 +360,10 @@ test("reload, back, and forward drive history", async () => {
     tab: TAB,
     methods: {
       "Page.reload": () => ({}),
-      "Page.getNavigationHistory": () => ({ currentIndex: 1, entries: [{ id: 1 }, { id: 2 }, { id: 3 }] }),
+      "Page.getNavigationHistory": () => ({
+        currentIndex: 1,
+        entries: [{ id: 1, url: "https://github.com/a" }, { id: 2, url: TAB.url }, { id: 3, url: "https://github.com/b" }],
+      }),
       "Page.navigateToHistoryEntry": () => ({}),
     },
   });
@@ -373,11 +376,46 @@ test("reload, back, and forward drive history", async () => {
 
   const single = makeChrome({
     tab: TAB,
-    methods: { "Page.getNavigationHistory": () => ({ currentIndex: 0, entries: [{ id: 1 }] }) },
+    methods: { "Page.getNavigationHistory": () => ({ currentIndex: 0, entries: [{ id: 1, url: TAB.url }] }) },
   });
   const d2 = driver(single, { active: true, tabId: TAB.id });
   await assert.rejects(d2.execute("back", {}), /no back history/);
   await assert.rejects(d2.execute("forward", {}), /no forward history/);
+});
+
+test("back/forward refuse targets that fail the policy gate", async () => {
+  const chrome = makeChrome({
+    tab: TAB,
+    methods: {
+      "Page.getNavigationHistory": () => ({
+        currentIndex: 1,
+        entries: [{ id: 1, url: "https://chase.com/" }, { id: 2, url: TAB.url }, { id: 3, url: "https://evil.com/" }],
+      }),
+      "Page.navigateToHistoryEntry": () => ({}),
+    },
+  });
+  const d = driver(chrome, { active: true, tabId: TAB.id });
+  await assert.rejects(d.execute("back", {}), /refused: denylisted origin/);
+  await assert.rejects(d.execute("forward", {}), /refused: origin not allowlisted/);
+  assert.ok(!chrome.calls.some((c) => c[0] === "Page.navigateToHistoryEntry"), "gated walk never runs");
+});
+
+test("scroll accepts dx/dy aliases for deltaX/deltaY", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  await d.execute("scroll", { dx: 10, dy: -50 });
+  const wheels = chrome.calls.filter((c) => c[0] === "Input.dispatchMouseEvent");
+  assert.deepEqual({ x: wheels[0][1].x, deltaX: wheels[0][1].deltaX, deltaY: wheels[0][1].deltaY }, { x: 400, deltaX: 10, deltaY: -50 });
+});
+
+test("click validates button/count before touching the page", async () => {
+  const chrome = handsChrome();
+  const d = await handsDriver(chrome);
+  const cdpCalls = () => chrome.calls.filter((c) => c[0] !== "tabs.get").length;
+  const before = cdpCalls();
+  await assert.rejects(d.execute("click", { ref: "1", button: "sideways" }), /unknown button/);
+  await assert.rejects(d.execute("click", { ref: "1", clickCount: 9 }), /clickCount/);
+  assert.equal(cdpCalls(), before, "no CDP ran for invalid clicks");
 });
 
 test("pdf prints the page; empty prints raise", async () => {

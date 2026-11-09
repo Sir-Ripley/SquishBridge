@@ -4,7 +4,7 @@ All commands act **only on the shared tab** and travel as JSON messages
 over the extension's single outbound socket:
 
 - Extension → bridge (results) and bridge → extension (commands) share one envelope.
-- Squish talks to the bridge's loopback-only HTTP API, which forwards over the socket.
+- Squish talks to the bridge's trusted-source-gated HTTP API, which forwards over the socket. Trusted-only endpoints refuse strangers with `403 untrusted-source`; unknown routes are `404 not found` (trailing slashes are tolerated).
 
 ## Envelopes
 
@@ -41,19 +41,19 @@ touch disk, and `GET /v1/devices` never exposes hashes.
 
 | Command | Payload | Result | Milestone |
 |---|---|---|---|
-| `navigate` | `{ url }` | `{ url, title }` | M2 |
+| `navigate` | `{ url }` | `{ url }` (echo; the load is still in flight — follow with `get_state`) | M2 |
 | `screenshot` | `{}` | `{ pngBase64 }` | M2 |
 | `dom_snapshot` | `{}` | `{ snapshot }` | M2 |
 | `click` | `{ ref }` or `{ x, y }` | `{ clicked }` | M3: scrolls into view, clicks the quad center. Stale refs refuse — re-snapshot. |
 | `type` / `fill` | `{ ref, text }` | `{ typed }` | M3: focus + insert; `fill` select-alls first (replace, never append). |
 | `press_key` | `{ key }` | `{ pressed }` | M3: single char or Enter/Tab/Escape/Arrows/Backspace/Delete/Home/End/PageUp/PageDown. |
-| `scroll` | `{ ref?, dx?, dy? }` | `{ scrolled }` | M3: wheel at the ref center, else viewport center; `dy` defaults to 400. |
+| `scroll` | `{ ref?, deltaX?, deltaY? }` | `{ scrolled }` | M3: wheel at the ref center, else viewport center; `deltaY` defaults to 400. `dx`/`dy` accepted as aliases. |
 | `get_state` | `{}` | `{ url, title, loading }` | M2 |
 | `wait_for` | `{ text?, ref?, timeoutMs? }` | `{ found }` | M3: polls snapshots every 500 ms (default 10 s, max 60 s); timeout is an error. |
 | `list_tabs` | `{}` | `{ tabs: [{ tabId, title, origin, shared, drivable }] }` | v0.3: needs NO active session (that is the point — discover tabs, then ask the user to share one). Metadata only: origins, never full URLs. Never attaches the debugger. |
 | `hover` | `{ ref }` or `{ x, y }` | `{ hovered }` | v0.4: moves the mouse without pressing (menus, tooltips). |
 | `reload` | `{ ignoreCache? }` | `{ reloaded }` | v0.4 |
-| `back` / `forward` | `{}` | `{ navigated }` | v0.4: history walk; empty history is an error, not silent. |
+| `back` / `forward` | `{}` | `{ navigated }` | v0.4: history walk; empty history is an error, not silent. The destination entry is policy-gated like a `navigate`. |
 | `pdf` | `{}` | `{ pdfBase64 }` | v0.4: prints the page (background graphics on). |
 | `upload_file` | `{ ref, path }` | `{ uploaded, file }` | v0.4: sets a form's file input to a user-named local path (`C:\…`). The agent cannot browse the disk — the user names the file in chat. The filename is audit-logged. |
 | `evaluate` | `{ expression, awaitPromise? }` | `{ value }` | v0.4, approved 2026-11-09: runs JS in page context. Expression cap 20k chars, return-by-value cap 100k chars, page exceptions mapped to errors, `undefined` comes back `null`. Every call is audit-logged WITH its expression. |

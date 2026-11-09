@@ -113,6 +113,18 @@ if (manifest) {
   }
 }
 
+// Every element id popup.js touches must exist in popup.html: a missing id
+// nulls the lookup and kills the whole popup script on load.
+{
+  const html = read(path.join(EXT, "popup.html"));
+  const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
+  const js = read(path.join(EXT, "popup.js"));
+  const used = [...js.matchAll(/\$\("([^"]+)"\)/g)].map((m) => m[1]);
+  const missing = [...new Set(used)].filter((id) => !ids.has(id));
+  check(used.length > 0, "popup.js element lookups found", `${used.length} lookups`);
+  check(missing.length === 0, "every popup.js id exists in popup.html", JSON.stringify(missing));
+}
+
 // ---- Forbidden APIs in shipped (non-test) extension code ----
 
 const FORBIDDEN_CODE = [
@@ -152,6 +164,20 @@ for (const f of jsFiles(EXT)) {
     "Runtime.evaluate only in extension/lib/cdp.js (audited driver path)",
     JSON.stringify(users)
   );
+}
+
+// ---- Tool scripts ----
+
+// Windows PowerShell reads BOM-less .ps1 as the ANSI code page, so any
+// non-ASCII byte (a stray em-dash) can break parsing outright. Keep
+// tool scripts pure ASCII.
+{
+  const toolsDir = path.join(ROOT, "tools");
+  for (const f of fs.readdirSync(toolsDir).filter((n) => n.endsWith(".ps1"))) {
+    const buf = fs.readFileSync(path.join(toolsDir, f));
+    const bad = buf.find((b) => b > 127);
+    check(bad === undefined, `tools/${f} is ASCII-only`, bad === undefined ? "" : `byte ${bad}`);
+  }
 }
 
 // ---- Bridge ----

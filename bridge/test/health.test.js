@@ -64,18 +64,47 @@ test("loopback audit viewer returns entries newest-last, capped", async () => {
   }
 });
 
-test("unknown routes 404; commands accept POST only (GET is 501)", async () => {
+test("unknown routes 404; commands accept POST only (GET is 405)", async () => {
   const server = createServer();
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   try {
     const port = server.address().port;
     const notFound = await get(port, "/nope");
     assert.equal(notFound.status, 404);
+    assert.equal(notFound.body.error, "not found");
     // Pairing is real in M1 but POST-only: a GET is not a pairing exchange.
     const pairingGet = await get(port, "/v1/pair/code");
     assert.equal(pairingGet.status, 404);
     const commands = await get(port, "/v1/commands");
-    assert.equal(commands.status, 501);
+    assert.equal(commands.status, 405);
+    assert.equal(commands.body.error, "method-not-allowed");
+  } finally {
+    server.close();
+  }
+});
+
+test("trailing slashes never 404 known routes", async () => {
+  const server = createServer(opts());
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const port = server.address().port;
+    assert.equal((await get(port, "/health/")).status, 200);
+    assert.equal((await get(port, "/v1/status/")).status, 200);
+    assert.equal((await get(port, "/v1/devices/")).status, 200);
+  } finally {
+    server.close();
+  }
+});
+
+test("status answers on loopback with dial addresses", async () => {
+  const server = createServer(opts());
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const port = server.address().port;
+    const res = await get(port, "/v1/status");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.ok(Array.isArray(res.body.addrs), "status still reports dial addresses");
   } finally {
     server.close();
   }

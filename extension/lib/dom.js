@@ -28,6 +28,7 @@ const SB_AX_ROLES = new Set([
   "tab",
   "switch",
   "slider",
+  "spinbutton",
   "heading",
   "image",
 ]);

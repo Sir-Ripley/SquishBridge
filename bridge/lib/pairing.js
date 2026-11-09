@@ -30,7 +30,9 @@ function randomCode() {
 }
 
 function normalizeCode(code) {
-  return String(code || "").trim().toUpperCase().replace(/\s+/g, "");
+  // Dashes and whitespace are formatting only: "abcd-1234", "ABCD1234" and
+  // "abcd 1234" are the same code. Codes are stored under this form.
+  return String(code || "").trim().toUpperCase().replace(/[\s-]+/g, "");
 }
 
 function createPairingStore() {
@@ -40,9 +42,9 @@ function createPairingStore() {
 function issueCode(store, { ttlMs = DEFAULT_TTL_MS, now = Date.now() } = {}) {
   const ttl = Math.min(Math.max(Number(ttlMs) || DEFAULT_TTL_MS, 60 * 1000), MAX_TTL_MS);
   let code = randomCode();
-  while (store.has(code)) code = randomCode();
+  while (store.has(normalizeCode(code))) code = randomCode();
   const createdAt = now;
-  store.set(code, { expiresAt: createdAt + ttl, attempts: 0, spent: false, createdAt });
+  store.set(normalizeCode(code), { expiresAt: createdAt + ttl, attempts: 0, spent: false, createdAt });
   return { code, expiresAt: new Date(createdAt + ttl).toISOString() };
 }
 

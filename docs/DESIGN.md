@@ -62,7 +62,7 @@ Runs on Squish's computer. Responsibilities:
 
 - **Pairing endpoint** — accepts a pairing code + install identity, issues a device token (store only a hash of it).
 - **WebSocket endpoint** — the extension's single outbound connection; routes commands from Squish to the extension and results back.
-- **Local command API** — a loopback-only HTTP/WS interface Squish uses to submit commands and await results (this is the seam Squish's tooling talks to).
+- **Local command API** — a trusted-source-gated HTTP interface Squish uses to submit commands and await results (this is the seam Squish's tooling talks to).
 - **Audit log** — append-only record: timestamp, command, target origin, result status. (No page content in the log beyond what a command explicitly returned.)
 
 Reachability: the extension connects outbound, so no inbound ports are needed on Rodney's network. Preferred route is over the existing **Tailscale** tailnet (both Squish's computer and Rodney's laptop are members), keeping the bridge off the public internet entirely. Fallback: a WSS endpoint with the token as the only credential, if the tailnet route proves impractical.

@@ -61,7 +61,18 @@ function sbIsAllowlisted(urlOrHost, allowlist) {
 function sbIsDenied(urlOrHost) {
   const host = sbNormalizeHost(urlOrHost);
   if (!host) return true; // Unparseable target: refuse.
-  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return true;
+  // Loopback in every form the URL parser can produce (it already folds
+  // 127.1 and 2130706433-style notations to 127.0.0.1), plus the
+  // unspecified addresses, which resolve locally where they resolve at all.
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "[::1]" ||
+    host === "0.0.0.0" ||
+    host === "[::]"
+  ) {
+    return true;
+  }
   if (host.endsWith(".localhost")) return true;
   if (host.startsWith("chrome") || host === "newtab") return true;
   return SB_DENYLIST.some((re) => re.test(host));
@@ -131,6 +142,16 @@ function sbShareRefusalMessage(reason, url) {
   return "refused: " + r;
 }
 
+// Which host (if any) the popup should prefetch a banner grant for. Only
+// real https pages qualify: chrome://, blank, http, and denylisted pages
+// get no prompt — the background refuses them with guidance instead.
+function sbGrantTargetForTab(tabUrl) {
+  if (typeof tabUrl !== "string" || !tabUrl.startsWith("https://")) return null;
+  const host = sbNormalizeHost(tabUrl);
+  if (!host || sbIsDenied("https://" + host + "/")) return null;
+  return host;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     SB_INITIAL_ALLOWLIST,
@@ -141,5 +162,6 @@ if (typeof module !== "undefined" && module.exports) {
     sbCheckUrl,
     sbPlanShareSite,
     sbShareRefusalMessage,
+    sbGrantTargetForTab,
   };
 }

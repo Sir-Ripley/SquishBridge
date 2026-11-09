@@ -73,9 +73,9 @@ function renderAudit(entries) {
   }
 }
 
-async function refresh() {
+async function refresh(keepError) {
   try {
-    showError("");
+    if (!keepError) showError("");
     const s = await send("get-status");
     if (!s.ok) throw new Error(s.error);
     renderStatus(s);
@@ -90,13 +90,28 @@ $("connect").addEventListener("click", async () => {
   try {
     showError("");
     $("connect").disabled = true;
+    // Prefetch the banner grant inside the click: Chrome only honors the
+    // permission prompt while this gesture is fresh. The background
+    // re-verifies before proceeding, so a deny/throw here just flows into
+    // its normal "permission denied" guidance instead of failing silently.
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const host = sbGrantTargetForTab(tab && tab.url);
+      if (host) {
+        const origins = ["https://" + host + "/*"];
+        const has = await chrome.permissions.contains({ origins }).catch(() => false);
+        if (!has) await chrome.permissions.request({ origins }).catch(() => false);
+      }
+    } catch {
+      /* background reports the outcome; never fail the click here */
+    }
     const res = await send("connect-share", {});
     if (!res.ok) throw new Error(res.error);
     await refresh();
   } catch (err) {
+    // Refresh state but keep the failure visible: refresh() clears errors.
+    await refresh(true).catch(() => {});
     showError(err);
-  } finally {
-    await refresh().catch(() => {});
   }
 });
 
@@ -183,9 +198,9 @@ $("pair").addEventListener("click", async () => {
     $("pairCode").value = "";
     await refresh();
   } catch (err) {
+    // Refresh state but keep the failure visible: refresh() clears errors.
+    await refresh(true).catch(() => {});
     showError(err);
-  } finally {
-    await refresh().catch(() => {});
   }
 });
 

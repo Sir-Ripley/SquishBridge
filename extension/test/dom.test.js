@@ -36,6 +36,11 @@ test("refs restart per snapshot and cap at the limit with truncated flag", () =>
   assert.equal(again.truncated, false);
 });
 
+test("spinbutton (number inputs) condenses with its value", () => {
+  const { nodes } = dom.sbCondenseAXTree([ax("spinbutton", "Quantity", { value: { value: "2" }, backendDOMNodeId: 7 })]);
+  assert.deepEqual(nodes, [{ ref: "1", role: "spinbutton", name: "Quantity", value: "2" }]);
+});
+
 test("empty or malformed trees condense to nothing, never throw", () => {
   for (const input of [undefined, null, [], [{ bogus: true }]]) {
     const out = dom.sbCondenseAXTree(input);

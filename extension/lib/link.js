@@ -17,7 +17,7 @@ function sbBackoffDelay(attempt) {
 
 function sbNormalizeBridgeUrl(raw) {
   const s = String(raw || "").trim();
-  if (!s) throw new Error("enter the bridge address, e.g. ws://100.64.0.1:3031");
+  if (!s) throw new Error("enter the bridge address, e.g. ws://127.0.0.1:3031");
   let url;
   try {
     url = new URL(s);

@@ -1,14 +1,13 @@
 "use strict";
 
-/* Squish Bridge — bridge server (M1).
- * Stdlib http + `ws` for the extension socket. Loopback-bound by default;
- * on the agent machine set SQUISH_BRIDGE_HOST to the tailnet IP so the
- * extension can reach it without touching the public internet.
- *
- * Real in M1: pairing code issue/exchange, device token store (hash at
+/* Squish Bridge — bridge server.
+ * Stdlib http + `ws` for the extension socket. Runs on the laptop: binds
+ * all interfaces by default (loopback for the extension, tailnet/LAN for
+ * the agent) with the admin API gated to trusted sources — reachability
+ * is not access. Pairing code issue/exchange, device token store (hash at
  * rest), revoke/unpair, authenticated extension WebSocket with reconnect
- * support, heartbeat, per-request audit log.
- * M2 adds: the local command API bodies and socket command routing.
+ * support, heartbeat, per-request audit log, and the command API whose
+ * HTTP responses ARE the command results.
  */
 
 const http = require("node:http");
@@ -113,10 +112,6 @@ function sendJson(res, req, status, body, origin) {
   return undefined;
 }
 
-function notImplemented(res, req, milestone, what) {
-  return sendJson(res, req, 501, { ok: false, error: `${what} arrives in ${milestone}` });
-}
-
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let raw = "";
@@ -191,12 +186,15 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
     try {
       const url = new URL(req.url || "/", "http://localhost");
       const origin = req.headers.origin || "";
+      // Trailing slashes never 404 a known route (/health/ === /health).
+      const pathname = url.pathname.replace(/\/+$/, "") || "/";
 
-      if (req.method === "GET" && url.pathname === "/health") {
+      if (req.method === "GET" && pathname === "/health") {
         return sendJson(res, req, 200, { ok: true, service: "squish-bridge", version: VERSION }, origin);
       }
 
-      if (req.method === "GET" && url.pathname === "/v1/status") {
+      if (req.method === "GET" && pathname === "/v1/status") {
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
         const live = [...sockets.keys()];
         return sendJson(
           res,
@@ -217,9 +215,9 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
         );
       }
 
-      // Squish-only: mint a one-time pairing code (shown in chat).
-      if (req.method === "POST" && url.pathname === "/v1/pair/code") {
-        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+      // Trusted-only: mint a one-time pairing code (shown in chat).
+      if (req.method === "POST" && pathname === "/v1/pair/code") {
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         const ttlMs = body.ttlMinutes === undefined ? undefined : Number(body.ttlMinutes) * 60 * 1000;
@@ -233,9 +231,9 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
       // never needs a host permission for the bridge address. One audited
       // path, not two.
 
-      // Squish-only: inspect devices (hashes never leave the bridge).
-      if (req.method === "GET" && url.pathname === "/v1/devices") {
-        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+      // Trusted-only: inspect devices (hashes never leave the bridge).
+      if (req.method === "GET" && pathname === "/v1/devices") {
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
         const list = Object.entries(devices).map(([installId, d]) => ({
           installId,
           createdAt: d.createdAt,
@@ -245,19 +243,19 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
         return sendJson(res, req, 200, { ok: true, devices: list }, origin);
       }
 
-      // Squish-only: inspect the bridge audit log (page content is never
+      // Trusted-only: inspect the bridge audit log (page content is never
       // logged, so entries are safe to read back into chat).
-      if (req.method === "GET" && url.pathname === "/v1/audit") {
-        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+      if (req.method === "GET" && pathname === "/v1/audit") {
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
         const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
         return sendJson(res, req, 200, { ok: true, entries: audit.readTail(LOG_FILE, limit) }, origin);
       }
 
-      // Squish-only: submit a command to a paired browser. The bridge
+      // Trusted-only: submit a command to a paired browser. The bridge
       // forwards it over the extension socket and awaits the result —
-      // the HTTP response IS the command result (M2 eyes).
-      if (req.method === "POST" && url.pathname === "/v1/commands") {
-        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+      // the HTTP response IS the command result.
+      if (req.method === "POST" && pathname === "/v1/commands") {
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         if (!body || typeof body.type !== "string" || !body.type) {
@@ -299,10 +297,10 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
         }
       }
 
-      // Squish-only (or extension unpair via its own token — M1: loopback
-      // only; the popup unpairs locally and the socket close is observed).
-      if (req.method === "POST" && url.pathname === "/v1/devices/revoke") {
-        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+      // Trusted-only revoke (the popup unpairs locally and the socket
+      // close is observed; this ends it bridge-side too).
+      if (req.method === "POST" && pathname === "/v1/devices/revoke") {
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         const revoked = pairing.revokeDevice(devices, String(body.installId || ""));
@@ -314,9 +312,9 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
         return sendJson(res, req, 200, { ok: true, revoked }, origin);
       }
 
-      if (url.pathname === "/v1/commands" || url.pathname.startsWith("/v1/commands/")) {
+      if (pathname === "/v1/commands" || pathname.startsWith("/v1/commands/")) {
         await readBody(req).catch(() => {});
-        return notImplemented(res, req, "M2-eyes", "command API");
+        return sendJson(res, req, 405, { ok: false, error: "method-not-allowed" }, origin);
       }
 
       await readBody(req).catch(() => {});
@@ -469,9 +467,11 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
         continue;
       }
       ws._sbAlive = false;
-      ws.on("pong", function mark() {
+      // once(), not on(): a permanent listener per beat would leak and trip
+      // MaxListenersExceededWarning within minutes.
+      ws.once("pong", function mark() {
         ws._sbAlive = true;
-      }, { once: true });
+      });
       try {
         ws.ping();
       } catch {

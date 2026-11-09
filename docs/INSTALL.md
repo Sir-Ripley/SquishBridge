@@ -105,7 +105,7 @@ Two more v0.4 behaviors worth knowing:
 | Windows Firewall prompt for Node.js | First tailnet/LAN listen → Allow (private networks at least) or Squish can't dial in. |
 | Squish gets 403 from the bridge API | Its IP isn't trusted → it must dial from your tailnet (range `100.64.0.0/10` trusted by default); check `tailscale status`. |
 | "pairing refused: code-expired / unknown-or-spent" | Code older than 10 min or already used → ask Squish for a fresh one. |
-| Allowlist add "permission denied" | Host grant declined → re-add and Accept so the banner can show. |
+| Connect (or Add) says "permission denied" for a site | The host-grant prompt was dismissed or blocked → press Connect again and click **Allow** on the Chrome prompt ("read and change data on …"). No prompt appearing at all means the extension is stale → reload it at `chrome://extensions` and retry. |
 | Banner missing but session active | Host permission revoked → re-add the origin; the debugger infobar still shows control meanwhile. |
 | `no-device-connected` from `/v1/commands` | Extension socket down → popup shows state; check pairing and tailnet. |
 | `attach-failed` on Start | Another debugger (DevTools, another extension) holds the tab → close it, Start again. |
@@ -118,4 +118,4 @@ Two more v0.4 behaviors worth knowing:
   the validator fails the build if one ever appears.
 - One shared tab at a time. Nothing runs in the background.
 - Both audit logs are inspectable: popup viewer + Download, and bridge
-  `GET /v1/audit` (loopback-only).
+  `GET /v1/audit` (trusted sources only).

@@ -28,6 +28,15 @@ test("expired codes are rejected and pruned", () => {
   assert.equal(pairing.pendingCount(store, { now: 61 * 1000 }), 0);
 });
 
+test("codes redeem with or without the dash, any case", () => {
+  for (const variant of [(c) => c, (c) => c.replace("-", ""), (c) => c.toLowerCase(), (c) => `  ${c.replace("-", " ")}  `]) {
+    const store = pairing.createPairingStore();
+    const { code } = pairing.issueCode(store);
+    assert.match(code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    assert.equal(pairing.redeemCode(store, variant(code)).ok, true, variant(code));
+  }
+});
+
 test("a bad-shaped exchange burns the code", () => {
   const store = pairing.createPairingStore();
   const { code } = pairing.issueCode(store);

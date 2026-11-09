@@ -232,6 +232,14 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
           return snapshotNow(tab.id);
         }
         case "click": {
+          const button = args.button === undefined ? "left" : String(args.button);
+          if (!["left", "middle", "right"].includes(button)) {
+            throw new Error(`refused: unknown button ${button}`);
+          }
+          const clickCount = args.clickCount === undefined ? 1 : Number(args.clickCount);
+          if (!Number.isInteger(clickCount) || clickCount < 1 || clickCount > 3) {
+            throw new Error("refused: clickCount must be 1-3");
+          }
           let point;
           if (args.ref !== undefined) {
             const objectId = await resolveRef(tab.id, String(args.ref));
@@ -242,14 +250,6 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
             point = { x: args.x, y: args.y };
           } else {
             throw new Error("refused: click needs { ref } or { x, y }");
-          }
-          const button = args.button === undefined ? "left" : String(args.button);
-          if (!["left", "middle", "right"].includes(button)) {
-            throw new Error(`refused: unknown button ${button}`);
-          }
-          const clickCount = args.clickCount === undefined ? 1 : Number(args.clickCount);
-          if (!Number.isInteger(clickCount) || clickCount < 1 || clickCount > 3) {
-            throw new Error("refused: clickCount must be 1-3");
           }
           for (const mouseType of ["mousePressed", "mouseReleased"]) {
             await send(tab.id, "Input.dispatchMouseEvent", {
@@ -350,12 +350,15 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
             const vp = (metrics && metrics.cssVisualViewport) || {};
             point = { x: vp.pageX || 400, y: vp.pageY || 300 };
           }
+          // Canonical names are deltaX/deltaY; dx/dy stay as aliases.
+          const rawDX = args.deltaX !== undefined ? args.deltaX : args.dx;
+          const rawDY = args.deltaY !== undefined ? args.deltaY : args.dy;
           await send(tab.id, "Input.dispatchMouseEvent", {
             type: "mouseWheel",
             x: point.x,
             y: point.y,
-            deltaX: Number(args.deltaX) || 0,
-            deltaY: args.deltaY === undefined ? 400 : Number(args.deltaY) || 0,
+            deltaX: Number(rawDX) || 0,
+            deltaY: rawDY === undefined ? 400 : Number(rawDY) || 0,
           });
           return { scrolled: true };
         }
@@ -372,6 +375,11 @@ function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, conden
           if (!target || target.id === undefined) {
             throw new Error(type === "back" ? "error: no back history" : "error: no forward history");
           }
+          // History entries carry their URLs: gate the destination like a
+          // navigate, so a walk can never land the tab off-policy.
+          const { list: navList, opts: navOpts } = await policy();
+          const navCheck = checkUrl(target.url || "", navList, navOpts);
+          if (!navCheck.ok) throw new Error("refused: " + navCheck.reason);
           await send(tab.id, "Page.navigateToHistoryEntry", { entryId: target.id });
           return { navigated: true };
         }
