@@ -49,13 +49,23 @@ npm start     # serves http://127.0.0.1:3031, or the tailnet IP via SQUISH_BRIDG
 
 ## 6. Drive a tab
 
-1. Open the tab you want to share (must be on an allowlisted origin).
-2. Popup → **Share this tab** → **Start**. The yellow banner appears and
-   the toolbar badge reads ON. Chrome also shows its own "debugging this
-   browser" infobar — expected.
-3. Squish drives via `POST /v1/commands`. You watch; sign in yourself if a
-   login appears (the agent stops and waits — that is the design, not a bug).
-4. **STOP** any time: popup button, `Ctrl+Shift+S`, or the banner's STOP.
+1. Open the tab you want to share.
+2. Popup → **Share this site**. That allowlists the site if needed (Chrome
+   asks for the per-site banner grant — accept it), shares the tab, and
+   starts the session in one click. (The manual path still works: **Share
+   this tab** → **Start**, after adding the origin by hand.)
+3. The yellow banner appears and the toolbar badge reads ON. Chrome also
+   shows its own "debugging this browser" infobar — expected.
+4. Squish drives via `POST /v1/commands` (and can see your open tabs via
+   `list_tabs` to suggest which one to share). You watch; sign in yourself
+   if a login appears (the agent stops and waits — that is the design, not
+   a bug).
+5. **STOP** any time: popup button, `Ctrl+Shift+S`, or the banner's STOP.
+
+Want zero setup per site? Tick **Open Mode** in the popup: any `https://`
+page except denylisted ones (banks, password managers) becomes shareable
+immediately. The per-site banner grant, banner/badge/STOP, and audit log
+still apply — Open Mode skips only the allowlist step.
 
 ## Troubleshooting
 

@@ -34,8 +34,31 @@ const HEARTBEAT_MS = 25 * 1000;
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
+// Extra loopback-exempt source(s): the agent's tailnet IP, so Squish can mint
+// codes and drive commands over the tailnet while the public internet stays
+// refused. Comma-separated override: SQUISH_BRIDGE_TRUSTED_IPS="100.x.y.z".
+const TRUSTED_SOURCES = new Set(
+  (process.env.SQUISH_BRIDGE_TRUSTED_IPS || "100.64.214.38")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
+function normalizeAddr(addr) {
+  if (!addr) return "";
+  if (addr.startsWith("::ffff:")) return addr.slice(7);
+  return addr;
+}
+
 function isLoopback(req) {
   return LOOPBACK.has(req.socket && req.socket.remoteAddress);
+}
+
+function isTrusted(req) {
+  const addr = req.socket && req.socket.remoteAddress;
+  if (!addr) return false;
+  if (LOOPBACK.has(addr)) return true;
+  return TRUSTED_SOURCES.has(normalizeAddr(addr));
 }
 
 function sendJson(res, req, status, body, origin) {
@@ -154,7 +177,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
 
       // Squish-only: mint a one-time pairing code (shown in chat).
       if (req.method === "POST" && url.pathname === "/v1/pair/code") {
-        if (!isLoopback(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         const ttlMs = body.ttlMinutes === undefined ? undefined : Number(body.ttlMinutes) * 60 * 1000;
@@ -170,7 +193,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
 
       // Squish-only: inspect devices (hashes never leave the bridge).
       if (req.method === "GET" && url.pathname === "/v1/devices") {
-        if (!isLoopback(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
         const list = Object.entries(devices).map(([installId, d]) => ({
           installId,
           createdAt: d.createdAt,
@@ -183,7 +206,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
       // Squish-only: inspect the bridge audit log (page content is never
       // logged, so entries are safe to read back into chat).
       if (req.method === "GET" && url.pathname === "/v1/audit") {
-        if (!isLoopback(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
         const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
         return sendJson(res, req, 200, { ok: true, entries: audit.readTail(LOG_FILE, limit) }, origin);
       }
@@ -192,7 +215,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
       // forwards it over the extension socket and awaits the result —
       // the HTTP response IS the command result (M2 eyes).
       if (req.method === "POST" && url.pathname === "/v1/commands") {
-        if (!isLoopback(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         if (!body || typeof body.type !== "string" || !body.type) {
@@ -237,7 +260,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
       // Squish-only (or extension unpair via its own token — M1: loopback
       // only; the popup unpairs locally and the socket close is observed).
       if (req.method === "POST" && url.pathname === "/v1/devices/revoke") {
-        if (!isLoopback(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
+        if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "loopback-only" }, origin);
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         const revoked = pairing.revokeDevice(devices, String(body.installId || ""));
@@ -428,4 +451,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, VERSION };
+module.exports = { createServer, VERSION, isTrusted, isLoopback, TRUSTED_SOURCES };

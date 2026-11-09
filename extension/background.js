@@ -13,6 +13,7 @@ const SB_STORE = {
   TOKEN: "sb.pairing", // { token, installId, bridgeUrl, pairedAt } | null
   INSTALL_ID: "sb.installId", // stable per browser profile; survives unpair
   ALLOWLIST: "sb.allowlist",
+  OPEN_MODE: "sb.openMode", // true = any https non-denylisted origin is drivable
   SESSION: "sb.session",
   AUDIT: "sb.audit",
 };
@@ -53,6 +54,16 @@ async function sbGetAllowlist() {
   const list = got[SB_STORE.ALLOWLIST];
   if (Array.isArray(list) && list.length) return list.map(String);
   return [...SB_INITIAL_ALLOWLIST];
+}
+
+async function sbGetOpenMode() {
+  const got = await sbStoreGet([SB_STORE.OPEN_MODE]);
+  return got[SB_STORE.OPEN_MODE] === true;
+}
+
+async function sbGetPolicy() {
+  const [allowlist, openMode] = await Promise.all([sbGetAllowlist(), sbGetOpenMode()]);
+  return { allowlist, opts: { openMode } };
 }
 
 async function sbGetSession() {
@@ -157,7 +168,13 @@ async function sbOnSocketMessage(ev, pairing) {
     reply = { id: msg.id, ok: true, result };
     await sbAudit(msg.type, result && result.url ? new URL(result.url).origin : "", "ok", "");
   } catch (err) {
-    const message = String((err && err.message) || err);
+    let message = String((err && err.message) || err);
+    if (/not attached/i.test(message)) {
+      // A STOP (or detach) mid-command surfaces a raw CDP error; when the
+      // session is gone, say so plainly instead (M5 mission-3 finding).
+      const s = await sbGetSession().catch(() => null);
+      if (!s || !s.active) message = "refused: session ended";
+    }
     reply = { id: msg.id, ok: false, error: message };
     await sbAudit(msg.type, "", message.startsWith("refused") ? "refused" : "error", message.slice(0, 200));
   }
@@ -374,6 +391,7 @@ function sbDriver() {
       chromeApi: chrome,
       getSession: sbGetSession,
       getAllowlist: sbGetAllowlist,
+      getOpenMode: sbGetOpenMode,
       condense: sbCondenseAXTree,
       checkUrl: sbCheckUrl,
     });
@@ -391,7 +409,8 @@ async function sbStartSession(tabId) {
   if (!Number.isInteger(tabId)) throw new Error("set a shared tab first");
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) throw new Error("shared tab no longer exists");
-  const check = sbCheckUrl(tab.url || "", await sbGetAllowlist());
+  const { allowlist, opts } = await sbGetPolicy();
+  const check = sbCheckUrl(tab.url || "", allowlist, opts);
   if (!check.ok) {
     await sbAudit("start-session", tab.url || "", "refused", check.reason);
     throw new Error("refused: " + check.reason);
@@ -462,6 +481,69 @@ async function sbSetBadge(on) {
   }
 }
 
+// The banner (and only the banner) needs host access: request it when an
+// origin first becomes drivable. Without it the origin cannot be driven
+// visibly, so callers refuse rather than run banner-less.
+async function sbGrantHost(host) {
+  try {
+    return await chrome.permissions.request({ origins: ["https://" + host + "/*"] });
+  } catch {
+    return false;
+  }
+}
+
+// One-click share: allowlist the current site if needed, designate the tab,
+// and start the session in a single user gesture.
+async function sbShareSite(tabId) {
+  let tab = null;
+  if (Number.isInteger(tabId)) {
+    tab = await chrome.tabs.get(tabId).catch(() => null);
+  } else {
+    const found = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+    tab = (found && found[0]) || null;
+  }
+  if (!tab) throw new Error("no tab to share");
+  const { allowlist, opts } = await sbGetPolicy();
+  const plan = sbPlanShareSite(tab.url || "", allowlist, opts);
+  if (plan.action === "refused") {
+    await sbAudit("share-site", tab.url || "", "refused", plan.reason);
+    throw new Error("refused: " + plan.reason);
+  }
+  let added = null;
+  if (plan.action === "add-and-start") {
+    const granted = await sbGrantHost(plan.host);
+    if (!granted) {
+      await sbAudit("share-site", plan.host, "refused", "host permission denied");
+      throw new Error("permission denied: grant host access so the banner can show on " + plan.host);
+    }
+    const list = await sbGetAllowlist();
+    if (!sbIsAllowlisted(plan.host, list)) list.push(plan.host);
+    await sbStoreSet({ [SB_STORE.ALLOWLIST]: list });
+    await sbAudit("allowlist-add", plan.host, "ok", "via share-site");
+    added = plan.host;
+  } else {
+    // Drivable as-is (allowlisted or open mode), but the banner still needs
+    // the host grant: it may never have been requested (open mode) or may
+    // have been revoked in site settings since. One rule: no grant, no drive.
+    let has = false;
+    try {
+      has = await chrome.permissions.contains({ origins: ["https://" + plan.host + "/*"] });
+    } catch {
+      has = false;
+    }
+    if (!has) {
+      const granted = await sbGrantHost(plan.host);
+      if (!granted) {
+        await sbAudit("share-site", plan.host, "refused", "host permission denied");
+        throw new Error("permission denied: grant host access so the banner can show on " + plan.host);
+      }
+    }
+  }
+  await sbSetSession({ active: false, tabId: tab.id, startedAt: null });
+  const session = await sbStartSession(tab.id);
+  return { session, added, tabId: tab.id, host: plan.host, allowlist: await sbGetAllowlist() };
+}
+
 // ---- Popup message API ----
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -469,8 +551,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const type = msg && msg.type;
     switch (type) {
       case "get-status": {
-        const [allowlist, session, auditLog, pairing, installId] = await Promise.all([
+        const [allowlist, openMode, session, auditLog, pairing, installId] = await Promise.all([
           sbGetAllowlist(),
+          sbGetOpenMode(),
           sbGetSession(),
           sbGetAudit(),
           sbGetPairing(),
@@ -482,6 +565,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           socketState: mem.socketState,
           session,
           allowlist,
+          openMode,
           auditTail: auditLog.slice(-50),
           pairing: pairing
             ? { paired: true, installId: pairing.installId, bridgeUrl: pairing.bridgeUrl }
@@ -501,6 +585,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true, session: await sbStartSession(session.tabId) });
         break;
       }
+      case "share-site": {
+        const res = await sbShareSite(msg.tabId);
+        sendResponse({ ok: true, ...res });
+        break;
+      }
+      case "set-open-mode": {
+        const on = msg.open === true;
+        await sbStoreSet({ [SB_STORE.OPEN_MODE]: on });
+        await sbAudit("open-mode", "", "ok", on ? "enabled" : "disabled");
+        sendResponse({ ok: true, openMode: on });
+        break;
+      }
       case "stop-session": {
         sendResponse({ ok: true, session: await sbStopSession(msg.reason || "popup stop") });
         break;
@@ -512,12 +608,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // The banner (and only the banner) needs host access: request it at
         // add time, per the design. Without it the origin cannot be driven
         // visibly, so the add is refused rather than silently banner-less.
-        let granted = false;
-        try {
-          granted = await chrome.permissions.request({ origins: ["https://" + host + "/*"] });
-        } catch {
-          granted = false;
-        }
+        const granted = await sbGrantHost(host);
         if (!granted) {
           await sbAudit("allowlist-add", host, "refused", "host permission denied");
           throw new Error("permission denied: grant host access so the banner can show on " + host);

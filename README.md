@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: M5 — code complete, missions pending.** Everything through M4 is built, tested (44 unit tests green), and validated installable. What remains is the live run on Rodney's signed-in Chrome: [`docs/MISSIONS.md`](docs/MISSIONS.md) is the runbook with results tables. The wire protocol is specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install from [`docs/INSTALL.md`](docs/INSTALL.md).
+> **Status: v0 shipped — all three M5 missions Pass on Rodney's signed-in Chrome (2026-11-08).** v0.3 adds one-click **Share this site**, an off-by-default **Open Mode** for sharing any site, agent tab discovery (`list_tabs`), and Supabase on the allowlist (52 unit tests green). Missions runbook: [`docs/MISSIONS.md`](docs/MISSIONS.md); wire protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Why
 
@@ -25,7 +25,7 @@ This is the heart of the project, not a feature list:
 - **No credentials, ever.** The extension requests no `cookies` permission and never reads passwords, cookies, or passkeys. If a page asks you to sign in, the agent stops and *you* sign in — then work continues.
 - **Your tab, your call.** Control applies only to a tab you explicitly share, one at a time.
 - **Visible and stoppable.** A persistent on-page banner while control is active, plus a hard STOP (button and keyboard shortcut) that ends the session instantly.
-- **Allowlist enforced in the extension.** Only origins you approve can be driven; a built-in denylist (banking, password managers) always wins.
+- **Allowlist enforced in the extension.** Only origins you approve can be driven; a built-in denylist (banking, password managers) always wins. **Open Mode** (off by default) skips the allowlist for zero-setup sharing — never the denylist, the per-site banner grant, or the audit log.
 - **Everything is logged.** Every command and its outcome lands in an audit log you can open at any time.
 
 ## Repository layout
@@ -58,7 +58,7 @@ npm start   # serves http://127.0.0.1:3031 (loopback-only)
 All checks (no Chrome needed):
 
 ```
-node --test extension/test/*.test.js bridge/test/*.test.js  # 44 unit tests
+node --test extension/test/*.test.js bridge/test/*.test.js  # 52 unit tests
 node tools/validate.js                                      # install readiness
 ```
 

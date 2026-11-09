@@ -11,6 +11,8 @@ const SB_INITIAL_ALLOWLIST = [
   "kaggle.com",
   "notebooklm.google.com",
   "notebook.google.com",
+  "supabase.com",
+  "app.supabase.com",
 ];
 
 // Substring/regex rules that always refuse, even if allowlisted.
@@ -66,7 +68,9 @@ function sbIsDenied(urlOrHost) {
 }
 
 // Single gate every command path must call. Returns {ok:true} or {ok:false, reason}.
-function sbCheckUrl(url, allowlist) {
+// options.openMode skips the allowlist only: https and the denylist always
+// apply. Omit options (or pass {}) for the classic closed behavior.
+function sbCheckUrl(url, allowlist, options) {
   if (typeof url !== "string" || !url) {
     return { ok: false, reason: "missing-url" };
   }
@@ -82,10 +86,31 @@ function sbCheckUrl(url, allowlist) {
   if (sbIsDenied(parsed.hostname)) {
     return { ok: false, reason: "denylisted origin" };
   }
-  if (!sbIsAllowlisted(parsed.hostname, allowlist)) {
+  const openMode = !!(options && options.openMode);
+  if (!openMode && !sbIsAllowlisted(parsed.hostname, allowlist)) {
     return { ok: false, reason: "origin not allowlisted" };
   }
   return { ok: true };
+}
+
+// One-click share decision for a tab URL. Returns:
+//   { action: "start", host }         — drivable as-is (allowlisted or open mode)
+//   { action: "add-and-start", host } — needs an allowlist add (+ host grant) first
+//   { action: "refused", reason }     — https/denylist gate failed; never shareable
+function sbPlanShareSite(url, allowlist, options) {
+  const openMode = !!(options && options.openMode);
+  if (typeof url !== "string" || !url) return { action: "refused", reason: "missing-url" };
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { action: "refused", reason: "bad-url" };
+  }
+  if (parsed.protocol !== "https:") return { action: "refused", reason: "origin must be https" };
+  if (sbIsDenied(parsed.hostname)) return { action: "refused", reason: "denylisted origin" };
+  const host = sbNormalizeHost(parsed.hostname);
+  if (openMode || sbIsAllowlisted(host, allowlist)) return { action: "start", host };
+  return { action: "add-and-start", host };
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -96,5 +121,6 @@ if (typeof module !== "undefined" && module.exports) {
     sbIsAllowlisted,
     sbIsDenied,
     sbCheckUrl,
+    sbPlanShareSite,
   };
 }

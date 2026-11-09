@@ -8,7 +8,7 @@ const dom = require("../lib/dom");
 
 const ALLOW = ["github.com"];
 
-function makeChrome({ tab, attachError = null, methods = {} }) {
+function makeChrome({ tab, tabs = null, attachError = null, methods = {} }) {
   const calls = [];
   const chrome = {
     calls,
@@ -18,6 +18,10 @@ function makeChrome({ tab, attachError = null, methods = {} }) {
         calls.push(["tabs.get", id]);
         if (!tab || id !== tab.id) throw new Error("No tab with id: " + id);
         return { ...tab };
+      },
+      query: async () => {
+        calls.push(["tabs.query"]);
+        return (tabs === null ? (tab ? [tab] : []) : tabs).map((t) => ({ ...t }));
       },
     },
     debugger: {
@@ -50,11 +54,12 @@ function makeChrome({ tab, attachError = null, methods = {} }) {
   return chrome;
 }
 
-function driver(chrome, session) {
+function driver(chrome, session, { openMode = false, allowlist = ALLOW } = {}) {
   return createDriver({
     chromeApi: chrome,
     getSession: async () => session,
-    getAllowlist: async () => ALLOW,
+    getAllowlist: async () => allowlist,
+    getOpenMode: async () => openMode,
     condense: dom.sbCondenseAXTree,
     checkUrl: safety.sbCheckUrl,
   });
@@ -270,6 +275,62 @@ test("attach failure surfaces and the session is left unattached", async () => {
   const chrome = makeChrome({ tab: TAB, attachError: "Another debugger is attached" });
   const d = driver(chrome, { active: true, tabId: TAB.id });
   await assert.rejects(d.execute("get_state", {}), /attach-failed/);
+});
+
+test("list_tabs needs no session and reports origin/title/drivable, never full URLs", async () => {
+  const tabs = [
+    { id: 7, url: "https://github.com/octocat?tab=repos", title: "GitHub", status: "complete" },
+    { id: 9, url: "https://example.com/some/path?q=1", title: "Example", status: "complete" },
+    { id: 11, url: "chrome://extensions/", title: "Extensions", status: "complete" },
+  ];
+  const chrome = makeChrome({ tab: tabs[0], tabs });
+  const d = driver(chrome, { active: false, tabId: null });
+  const res = await d.execute("list_tabs", {});
+  assert.deepEqual(res, {
+    tabs: [
+      { tabId: 7, title: "GitHub", origin: "https://github.com", shared: false, drivable: true },
+      { tabId: 9, title: "Example", origin: "https://example.com", shared: false, drivable: false },
+      { tabId: 11, title: "Extensions", origin: "", shared: false, drivable: false },
+    ],
+  });
+  assert.ok(!JSON.stringify(res).includes("?tab=repos"), "query strings must not leak");
+  assert.ok(!chrome.calls.some((c) => c[0] === "attach"), "listing never attaches the debugger");
+});
+
+test("list_tabs marks the shared tab and honors open mode for drivable", async () => {
+  const tabs = [
+    { id: 7, url: "https://github.com/octocat", title: "GitHub", status: "complete" },
+    { id: 9, url: "https://example.com/", title: "Example", status: "complete" },
+  ];
+  const chrome = makeChrome({ tab: tabs[0], tabs });
+  const d = driver(chrome, { active: true, tabId: 9 }, { openMode: true });
+  const res = await d.execute("list_tabs", {});
+  assert.deepEqual(res.tabs.map((t) => [t.tabId, t.shared, t.drivable]), [
+    [7, false, true],
+    [9, true, true],
+  ]);
+});
+
+test("open mode lets commands run off-allowlist but never off-denylist", async () => {
+  const chrome = makeChrome({
+    tab: { ...TAB, url: "https://example.com/" },
+    methods: { "Page.navigate": () => ({}) },
+  });
+  const d = driver(chrome, { active: true, tabId: TAB.id }, { openMode: true });
+  assert.deepEqual(await d.execute("get_state", {}), {
+    url: "https://example.com/",
+    title: TAB.title,
+    loading: false,
+  });
+  assert.deepEqual(await d.execute("navigate", { url: "https://other.example/" }), {
+    url: "https://other.example/",
+  });
+
+  const denied = makeChrome({ tab: { ...TAB, url: "https://chase.com/" } });
+  await assert.rejects(
+    driver(denied, { active: true, tabId: TAB.id }, { openMode: true }).execute("get_state", {}),
+    /refused: denylisted origin/
+  );
 });
 
 test("concurrent commands serialize on one debugger session", async () => {

@@ -14,9 +14,12 @@
   <section aria-label="Session">
     <h2>Session</h2>
     <div class="row">
+      <button id="shareSite" type="button" title="Allowlist this site if needed, share this tab, and start — one click">Share this site</button>
+      <button id="stop" type="button" class="danger">STOP</button>
+    </div>
+    <div class="row">
       <button id="useCurrentTab" type="button">Share this tab</button>
       <button id="start" type="button">Start</button>
-      <button id="stop" type="button" class="danger">STOP</button>
     </div>
     <p id="sessionInfo" class="muted">No shared tab selected.</p>
   </section>
@@ -37,6 +40,10 @@
 
   <section aria-label="Allowlist">
     <h2>Allowlist</h2>
+    <label class="row" title="When on, any https site except denylisted ones can be shared with no setup">
+      <input id="openMode" type="checkbox" /> Open Mode — share any site
+    </label>
+    <p class="muted">Open Mode skips the list below, never the denylist (banks, password managers) or the per-site banner grant.</p>
     <div class="row">
       <input id="newOrigin" type="text" placeholder="example.com" aria-label="Add origin" />
       <button id="addOrigin" type="button">Add</button>

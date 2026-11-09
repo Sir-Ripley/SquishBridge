@@ -16,11 +16,13 @@ function renderStatus(s) {
   $("version").textContent = "v" + (s.version || "?");
   const sess = s.session || {};
   const paired = !!(s.pairing && s.pairing.paired);
+  const open = s.openMode === true ? " · Open Mode" : "";
   $("status").textContent = sess.active
-    ? `Active — driving tab ${sess.tabId}`
+    ? `Active — driving tab ${sess.tabId}${open}`
     : paired
-      ? `Paired — bridge ${s.socketState || "disconnected"}`
+      ? `Paired — bridge ${s.socketState || "disconnected"}${open}`
       : "Not paired.";
+  $("openMode").checked = s.openMode === true;
   $("sessionInfo").textContent = sess.active
     ? `Sharing tab ${sess.tabId} since ${sess.startedAt || "?"}. Banner is shown on the page.`
     : sess.tabId != null
@@ -83,6 +85,28 @@ async function refresh() {
     showError(err);
   }
 }
+
+$("shareSite").addEventListener("click", async () => {
+  try {
+    showError("");
+    const res = await send("share-site", {});
+    if (!res.ok) throw new Error(res.error);
+    await refresh();
+  } catch (err) {
+    showError(err);
+  }
+});
+
+$("openMode").addEventListener("change", async () => {
+  try {
+    showError("");
+    const res = await send("set-open-mode", { open: $("openMode").checked });
+    if (!res.ok) throw new Error(res.error);
+    await refresh();
+  } catch (err) {
+    showError(err);
+  }
+});
 
 $("useCurrentTab").addEventListener("click", async () => {
   try {

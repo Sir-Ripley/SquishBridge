@@ -56,10 +56,24 @@ if (manifest) {
   check(!!(manifest.commands && manifest.commands["stop-session"]), "stop-session command registered");
 
   const hosts = manifest.optional_host_permissions || [];
+  // Optional grants nothing at install: each origin is individually prompted
+  // at runtime when the user adds/shares it. The single https wildcard makes
+  // arbitrary origins requestable (MV3 only grants origins covered by a
+  // manifest pattern); exact entries document the default allowlist.
+  const OPTIONAL_WILDCARD = "https://*/*";
   check(
-    hosts.length > 0 && hosts.every((h) => /^https:\/\/[^*]+\/\*$/.test(h)),
-    "optional hosts are exact https origins (no wildcards)",
+    hosts.length > 0 &&
+      hosts.every((h) => h === OPTIONAL_WILDCARD || /^https:\/\/[^*]+\/\*$/.test(h)),
+    "optional hosts are exact https origins + one documented https wildcard",
     JSON.stringify(hosts)
+  );
+  check(
+    hosts.filter((h) => h === OPTIONAL_WILDCARD).length <= 1,
+    "at most one optional wildcard"
+  );
+  check(
+    !manifest.host_permissions || manifest.host_permissions.length === 0,
+    "no static host_permissions (every grant is runtime + per-origin)"
   );
 }
 

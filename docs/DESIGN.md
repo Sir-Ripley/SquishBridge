@@ -67,6 +67,8 @@ Runs on Squish's computer. Responsibilities:
 
 Reachability: the extension connects outbound, so no inbound ports are needed on Rodney's network. Preferred route is over the existing **Tailscale** tailnet (both Squish's computer and Rodney's laptop are members), keeping the bridge off the public internet entirely. Fallback: a WSS endpoint with the token as the only credential, if the tailnet route proves impractical.
 
+> **Topology flip (2026-11-08, recorded at M5 sign-off):** Squish's hosted VM accepts no inbound tailnet connections (platform limit), so the bridge runs on **Rodney's laptop** instead of Squish's computer. The extension pairs locally on the laptop; Squish dials the bridge's tailnet address from the outside, and the bridge's admin API trusts Squish's tailnet IP via `SQUISH_BRIDGE_TRUSTED_IPS` (default `100.64.214.38`, comma-separated override). Everything else in this document is unchanged — the socket is still the extension's single outbound connection, now to `127.0.0.1`/laptop-tailnet instead of Squish's machine.
+
 ### 3.3 Squish side
 
 Squish submits commands through the bridge's local API and works from the returned screenshots/DOM snapshots — the same observe → act → verify loop used in Squish's own browser, now applied to the shared tab. Squish never receives, stores, or transmits Rodney's credentials (per principle 1, there is nothing to receive).
@@ -109,7 +111,8 @@ All commands act **only on the shared tab**, are **JSON messages** over the sock
 
 ### 6.2 Allowlist
 - The extension holds an origin allowlist, editable only from the popup by Rodney. Commands whose target origin is not on the list are **refused by the extension** and logged.
-- Initial list (missions in §8): `github.com`, `kaggle.com`, `notebooklm.google.com`, `notebook.google.com`.
+- Initial list (missions in §8, plus later additions): `github.com`, `kaggle.com`, `notebooklm.google.com`, `notebook.google.com`, `supabase.com`, `app.supabase.com`.
+- **Open Mode (v0.3, off by default, popup toggle):** skips the allowlist step so any `https://` non-denylisted origin is shareable with zero setup. Everything else in §6 still applies — explicit shared tab, banner + STOP, per-site banner grant (MV3 only grants origins covered by a manifest pattern, so the manifest carries one optional `https://*/*` that grants nothing until the user accepts a per-origin prompt), audit log, no credentials. The toggle itself is audit-logged.
 - A default **denylist** always wins over the allowlist: banking/financial origins, password-manager pages, and `chrome://` / extension pages (which Chrome won't let extensions drive anyway).
 
 ### 6.3 Audit

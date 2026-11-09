@@ -50,6 +50,17 @@ touch disk, and `GET /v1/devices` never exposes hashes.
 | `scroll` | `{ ref?, dx?, dy? }` | `{ scrolled }` | M3: wheel at the ref center, else viewport center; `dy` defaults to 400. |
 | `get_state` | `{}` | `{ url, title, loading }` | M2 |
 | `wait_for` | `{ text?, ref?, timeoutMs? }` | `{ found }` | M3: polls snapshots every 500 ms (default 10 s, max 60 s); timeout is an error. |
+| `list_tabs` | `{}` | `{ tabs: [{ tabId, title, origin, shared, drivable }] }` | v0.3: needs NO active session (that is the point — discover tabs, then ask the user to share one). Metadata only: origins, never full URLs. Never attaches the debugger. |
+
+## Sharing upgrades (v0.3)
+
+- **Share this site** (popup button, extension-local): allowlists the current
+  tab's origin if needed (with the usual host-grant prompt), designates the
+  tab, and starts the session — one click instead of add → share → start.
+- **Open Mode** (popup toggle, off by default): skips the allowlist check so
+  any `https://` non-denylisted origin can be shared with zero setup. The
+  denylist, the https rule, the per-site banner grant, the banner/badge/STOP,
+  and the audit log all still apply. The toggle itself is audit-logged.
 
 Deliberately excluded from v0: arbitrary JavaScript evaluation
 (`Runtime.evaluate`, free-form `scripting.executeScript`). See DESIGN §5.
@@ -57,5 +68,7 @@ Deliberately excluded from v0: arbitrary JavaScript evaluation
 ## Safety order (extension-enforced, before any CDP runs)
 
 1. Session active with an explicitly shared tab? If not, refuse.
-2. `sbCheckUrl` on the target URL: https → denylist → allowlist.
+   (`list_tabs` is exempt: read-only metadata, no CDP, no page access.)
+2. `sbCheckUrl` on the target URL: https → denylist → allowlist
+   (Open Mode skips the allowlist step only).
 3. Refusals are returned as `{ ok: false, error }` **and** audit-logged.

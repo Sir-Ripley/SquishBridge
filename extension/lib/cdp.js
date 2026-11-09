@@ -14,6 +14,9 @@
 
 const M3_HANDS = new Set(["click", "type", "fill", "press_key", "scroll", "wait_for"]);
 const M2_EYES = new Set(["navigate", "screenshot", "dom_snapshot", "get_state"]);
+// v0.3 share upgrades: read-only tab discovery. Needs no active session —
+// it is how the agent learns which tabs exist before the user shares one.
+const M6_SHARE = new Set(["list_tabs"]);
 
 // windowsVirtualKeyCode for press_key. Single characters bypass this map
 // and travel as keyDown/keyUp with text.
@@ -37,10 +40,18 @@ const SB_WAIT_POLL_MS = 500;
 const SB_WAIT_DEFAULT_MS = 10000;
 const SB_WAIT_MAX_MS = 60000;
 
-function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl }) {
+function createDriver({ chromeApi, getSession, getAllowlist, getOpenMode, condense, checkUrl }) {
   if (!chromeApi || !chromeApi.debugger || !chromeApi.tabs) throw new Error("driver needs chrome.debugger + chrome.tabs");
   for (const [name, fn] of [["getSession", getSession], ["getAllowlist", getAllowlist], ["condense", condense], ["checkUrl", checkUrl]]) {
     if (typeof fn !== "function") throw new Error(`driver needs a ${name} hook`);
+  }
+  const openModeOf = typeof getOpenMode === "function" ? getOpenMode : async () => false;
+
+  // Current safety policy: the allowlist plus the open-mode flag threaded
+  // into every sbCheckUrl call.
+  async function policy() {
+    const [list, openMode] = await Promise.all([getAllowlist(), openModeOf()]);
+    return { list, opts: { openMode: !!openMode } };
   }
 
   let attachedTab = null;
@@ -101,7 +112,8 @@ function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl 
     }
     const tab = await chromeApi.tabs.get(session.tabId).catch(() => null);
     if (!tab) throw new Error("refused: shared tab is gone");
-    const check = checkUrl(tab.url || "", await getAllowlist());
+    const { list, opts } = await policy();
+    const check = checkUrl(tab.url || "", list, opts);
     if (!check.ok) throw new Error("refused: " + check.reason);
     return tab;
   }
@@ -146,8 +158,43 @@ function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl 
     };
   }
 
+  // Tab discovery for the agent: metadata only. Full URLs stay in the
+  // browser (paths and query strings can carry tokens); origin + title is
+  // enough to ask the user to share a tab. Never attaches the debugger.
+  async function listTabsNow() {
+    const [session, { list, opts }, tabs] = await Promise.all([
+      getSession().catch(() => null),
+      policy(),
+      chromeApi.tabs.query({}).catch(() => []),
+    ]);
+    const sharedId = session && Number.isInteger(session.tabId) ? session.tabId : null;
+    return {
+      tabs: (Array.isArray(tabs) ? tabs : [])
+        .filter((t) => t && Number.isInteger(t.id))
+        .map((t) => {
+          let origin = "";
+          try {
+            const o = new URL(t.url || "").origin;
+            origin = o === "null" ? "" : o;
+          } catch {
+            origin = "";
+          }
+          return {
+            tabId: t.id,
+            title: String(t.title || "").slice(0, 120),
+            origin,
+            shared: t.id === sharedId,
+            drivable: checkUrl(t.url || "", list, opts).ok,
+          };
+        }),
+    };
+  }
+
   async function execute(type, payload) {
-    if (!M2_EYES.has(type) && !M3_HANDS.has(type)) throw new Error("unknown-command: " + type);
+    if (!M2_EYES.has(type) && !M3_HANDS.has(type) && !M6_SHARE.has(type)) {
+      throw new Error("unknown-command: " + type);
+    }
+    if (type === "list_tabs") return listTabsNow();
     const tab = await sharedTab();
     const args = payload && typeof payload === "object" ? payload : {};
     return exclusive(async () => {
@@ -160,7 +207,8 @@ function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl 
         case "navigate": {
           const url = payload && payload.url;
           if (typeof url !== "string" || !url) throw new Error("refused: missing-url");
-          const check = checkUrl(url, await getAllowlist());
+          const { list, opts } = await policy();
+          const check = checkUrl(url, list, opts);
           if (!check.ok) throw new Error("refused: " + check.reason);
           await send(tab.id, "Page.navigate", { url });
           return { url };
@@ -292,5 +340,5 @@ function createDriver({ chromeApi, getSession, getAllowlist, condense, checkUrl 
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { createDriver, M2_EYES, M3_HANDS };
+  module.exports = { createDriver, M2_EYES, M3_HANDS, M6_SHARE };
 }
