@@ -113,6 +113,24 @@ function sbPlanShareSite(url, allowlist, options) {
   return { action: "add-and-start", host };
 }
 
+// User-facing wording for a refused share. Raw gate reasons ("origin must
+// be https") baffle on chrome:// or new-tab pages, so those map to plain
+// guidance; policy refusals keep their stable "refused: …" prefix.
+function sbShareRefusalMessage(reason, url) {
+  const r = String(reason || "");
+  const u = String(url || "");
+  if (r === "origin must be https" || r === "missing-url" || r === "bad-url") {
+    if (!u || u.startsWith("chrome") || u === "about:blank" || u === "newtab") {
+      return "this page can't be shared — open a real https site first (not a new-tab or chrome:// page)";
+    }
+    return "this page can't be shared — only https sites can be driven";
+  }
+  if (r === "denylisted origin") {
+    return "refused: this kind of site (banking, password manager) can never be shared";
+  }
+  return "refused: " + r;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     SB_INITIAL_ALLOWLIST,
@@ -122,5 +140,6 @@ if (typeof module !== "undefined" && module.exports) {
     sbIsDenied,
     sbCheckUrl,
     sbPlanShareSite,
+    sbShareRefusalMessage,
   };
 }

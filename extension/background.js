@@ -531,7 +531,7 @@ async function sbShareSite(tabId) {
   const plan = sbPlanShareSite(tab.url || "", allowlist, opts);
   if (plan.action === "refused") {
     await sbAudit("share-site", tab.url || "", "refused", plan.reason);
-    throw new Error("refused: " + plan.reason);
+    throw new Error(sbShareRefusalMessage(plan.reason, tab.url || ""));
   }
   let added = null;
   if (plan.action === "add-and-start") {
@@ -566,6 +566,21 @@ async function sbShareSite(tabId) {
   await sbSetSession({ active: false, tabId: tab.id, startedAt: null });
   const session = await sbStartSession(tab.id);
   return { session, added, tabId: tab.id, host: plan.host, allowlist: await sbGetAllowlist() };
+}
+
+// One-button full control: connect the bridge socket, enable Open Mode so
+// any site is shareable, then share the current tab and start. Pairing is
+// the only prerequisite left outside the button.
+async function sbConnectShare() {
+  const pairing = await sbGetPairing();
+  if (!pairing) throw new Error("not paired: get a one-time code from chat and Pair first");
+  if (!(await sbGetOpenMode())) {
+    await sbStoreSet({ [SB_STORE.OPEN_MODE]: true });
+    await sbAudit("open-mode", "", "ok", "enabled via connect");
+  }
+  await sbEnsureConnection().catch(() => false);
+  const res = await sbShareSite(null);
+  return { ...res, openMode: true, socketState: mem.socketState };
 }
 
 // ---- Popup message API ----
@@ -612,6 +627,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "share-site": {
         const res = await sbShareSite(msg.tabId);
         sendResponse({ ok: true, ...res });
+        break;
+      }
+      case "connect-share": {
+        sendResponse({ ok: true, ...(await sbConnectShare()) });
         break;
       }
       case "set-open-mode": {

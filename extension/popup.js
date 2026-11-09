@@ -25,10 +25,8 @@ function renderStatus(s) {
   $("openMode").checked = s.openMode === true;
   $("sessionInfo").textContent = sess.active
     ? `Sharing tab ${sess.tabId} since ${sess.startedAt || "?"}. Banner is shown on the page.`
-    : sess.tabId != null
-      ? `Shared tab: ${sess.tabId} (not started).`
-      : "No shared tab selected.";
-  $("start").disabled = sess.active || sess.tabId == null;
+    : "Not sharing — open any https site and press Connect & Share.";
+  $("connect").disabled = sess.active;
   $("stop").disabled = !sess.active;
   const p = s.pairing || {};
   $("pairInfo").textContent = paired
@@ -88,14 +86,17 @@ async function refresh() {
   }
 }
 
-$("shareSite").addEventListener("click", async () => {
+$("connect").addEventListener("click", async () => {
   try {
     showError("");
-    const res = await send("share-site", {});
+    $("connect").disabled = true;
+    const res = await send("connect-share", {});
     if (!res.ok) throw new Error(res.error);
     await refresh();
   } catch (err) {
     showError(err);
+  } finally {
+    await refresh().catch(() => {});
   }
 });
 
@@ -103,30 +104,6 @@ $("openMode").addEventListener("change", async () => {
   try {
     showError("");
     const res = await send("set-open-mode", { open: $("openMode").checked });
-    if (!res.ok) throw new Error(res.error);
-    await refresh();
-  } catch (err) {
-    showError(err);
-  }
-});
-
-$("useCurrentTab").addEventListener("click", async () => {
-  try {
-    showError("");
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) throw new Error("no active tab");
-    const res = await send("set-tab", { tabId: tab.id });
-    if (!res.ok) throw new Error(res.error);
-    await refresh();
-  } catch (err) {
-    showError(err);
-  }
-});
-
-$("start").addEventListener("click", async () => {
-  try {
-    showError("");
-    const res = await send("start-session");
     if (!res.ok) throw new Error(res.error);
     await refresh();
   } catch (err) {

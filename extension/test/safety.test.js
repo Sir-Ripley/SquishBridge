@@ -71,6 +71,26 @@ test("sbPlanShareSite decides start vs add-and-start vs refused", () => {
   );
 });
 
+test("sbShareRefusalMessage explains unshareable pages in plain words", () => {
+  assert.match(
+    safety.sbShareRefusalMessage("origin must be https", "chrome://extensions/"),
+    /can't be shared.*real https site.*chrome:\/\//
+  );
+  assert.match(safety.sbShareRefusalMessage("missing-url", ""), /can't be shared/);
+  assert.match(
+    safety.sbShareRefusalMessage("origin must be https", "http://example.com/"),
+    /only https sites/
+  );
+  assert.match(
+    safety.sbShareRefusalMessage("denylisted origin", "https://chase.com/"),
+    /never be shared/
+  );
+  assert.equal(
+    safety.sbShareRefusalMessage("origin not allowlisted", "https://example.com/"),
+    "refused: origin not allowlisted"
+  );
+});
+
 test("sbCheckUrl enforces https + denylist + allowlist, in that order", () => {
   assert.deepEqual(safety.sbCheckUrl("http://github.com/", safety.SB_INITIAL_ALLOWLIST), {
     ok: false,

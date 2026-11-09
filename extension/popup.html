@@ -14,14 +14,10 @@
   <section aria-label="Session">
     <h2>Session</h2>
     <div class="row">
-      <button id="shareSite" type="button" title="Allowlist this site if needed, share this tab, and start — one click">Share this site</button>
+      <button id="connect" type="button" title="One click: connect to the bridge, enable full-site control, share this tab, and start">Connect &amp; Share</button>
       <button id="stop" type="button" class="danger">STOP</button>
     </div>
-    <div class="row">
-      <button id="useCurrentTab" type="button">Share this tab</button>
-      <button id="start" type="button">Start</button>
-    </div>
-    <p id="sessionInfo" class="muted">No shared tab selected.</p>
+    <p id="sessionInfo" class="muted">Not sharing.</p>
   </section>
 
   <section aria-label="Pairing">
@@ -43,7 +39,7 @@
     <label class="row" title="When on, any https site except denylisted ones can be shared with no setup">
       <input id="openMode" type="checkbox" /> Open Mode — share any site
     </label>
-    <p class="muted">Open Mode skips the list below, never the denylist (banks, password managers) or the per-site banner grant.</p>
+    <p class="muted">The Connect button turns this on automatically. It skips the list below, never the denylist (banks, password managers) or the per-site banner grant.</p>
     <div class="row">
       <input id="newOrigin" type="text" placeholder="example.com" aria-label="Add origin" />
       <button id="addOrigin" type="button">Add</button>

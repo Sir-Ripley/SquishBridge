@@ -54,11 +54,12 @@ at — hand the tailnet one to Squish so it can dial in from its side
 
 ## 6. Drive a tab
 
-1. Open the tab you want to share.
-2. Popup → **Share this site**. That allowlists the site if needed (Chrome
-   asks for the per-site banner grant — accept it), shares the tab, and
-   starts the session in one click. (The manual path still works: **Share
-   this tab** → **Start**, after adding the origin by hand.)
+1. Open the tab you want to share (any real `https://` site — not a new-tab
+   or `chrome://` page, which Chrome won't let extensions drive).
+2. Popup → **Connect & Share**. One click: it connects to the bridge,
+   enables full-site control, shares the tab, and starts the session.
+   (Chrome asks for a per-site banner grant the first time per site —
+   accept it, or the share is refused.)
 3. The yellow banner appears and the toolbar badge reads ON. Chrome also
    shows its own "debugging this browser" infobar — expected.
 4. Squish drives via `POST /v1/commands` (and can see your open tabs via
@@ -67,10 +68,12 @@ at — hand the tailnet one to Squish so it can dial in from its side
    a bug).
 5. **STOP** any time: popup button, `Ctrl+Shift+S`, or the banner's STOP.
 
-Want zero setup per site? Tick **Open Mode** in the popup: any `https://`
-page except denylisted ones (banks, password managers) becomes shareable
-immediately. The per-site banner grant, banner/badge/STOP, and audit log
-still apply — Open Mode skips only the allowlist step.
+Full-site control means any `https://` page except denylisted ones (banks,
+password managers) is shareable — the Connect button enables the
+underlying Open Mode automatically. The per-site banner grant,
+banner/badge/STOP, and audit log still apply; Open Mode skips only the
+allowlist step. Prefer the classic closed list? Unticking Open Mode in the
+popup returns to allowlist-only sharing.
 
 Two more v0.4 behaviors worth knowing:
 

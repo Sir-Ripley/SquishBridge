@@ -111,7 +111,7 @@ All commands act **only on the shared tab**, are **JSON messages** over the sock
 ## 6. Safety model
 
 ### 6.1 Session control
-- Control exists only inside an explicit session: Rodney picks the tab and presses **Start**; the popup and the on-page banner show the active state continuously; **Stop** (popup button, and a keyboard shortcut) detaches the debugger and ends the session immediately.
+- Control exists only inside an explicit session: Rodney presses **Connect & Share** on the tab he wants driven (v0.4 one-button flow: connect + full-site control + share + start); the popup and the on-page banner show the active state continuously; **Stop** (popup button, and a keyboard shortcut) detaches the debugger and ends the session immediately.
 - One shared tab at a time in v0. Switching tabs requires a new explicit share — except tabs the shared page opens itself (OAuth popups, `target=_blank` links), which the session auto-follows from v0.4: still one tab, still policy-gated, always audit-logged (`follow-tab`). A child that fails the gate is left alone for explicit sharing.
 
 ### 6.2 Allowlist

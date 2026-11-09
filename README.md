@@ -2,7 +2,7 @@
 
 A Chrome extension that pairs your own signed-in Chrome to your Muse agent, letting it drive one tab you designate. Your session, your network, your passkeys — credentials are never read or shared.
 
-> **Status: v0 shipped — all three M5 missions Pass on Rodney's signed-in Chrome (2026-11-08).** v0.4 is full control-as-you: hover, reload/back/forward, page PDF, user-named file uploads, right/double-click, key chords, full-page shots, popup auto-follow, and owner-approved audited page JS (`evaluate`) — on top of v0.3's one-click **Share this site**, **Open Mode**, `list_tabs`, and Supabase (62 unit tests green). Missions: [`docs/MISSIONS.md`](docs/MISSIONS.md); protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install: [`docs/INSTALL.md`](docs/INSTALL.md).
+> **Status: v0 shipped — all three M5 missions Pass on Rodney's signed-in Chrome (2026-11-08).** v0.4 is full control-as-you: hover, reload/back/forward, page PDF, user-named file uploads, right/double-click, key chords, full-page shots, popup auto-follow, and owner-approved audited page JS (`evaluate`) — on top of v0.3's **Open Mode**, `list_tabs`, and Supabase (63 unit tests green). Missions: [`docs/MISSIONS.md`](docs/MISSIONS.md); protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md); install: [`docs/INSTALL.md`](docs/INSTALL.md). Sharing is one button: **Connect & Share**.
 
 ## Why
 
@@ -14,7 +14,7 @@ Squish Bridge closes the gap from the other direction: instead of the agent's br
 
 Three pieces (details in the design doc):
 
-- **Extension** (Manifest V3) — lives in your Chrome. You pair it once with a one-time code, designate the shared tab, and start/stop control sessions. While a session runs, it drives that tab through the Chrome DevTools Protocol and returns screenshots and page structure to the agent.
+- **Extension** (Manifest V3) — lives in your Chrome. You pair it once with a one-time code, then one **Connect & Share** button per session: it connects, enables full-site control, shares the tab, and starts. While a session runs, it drives that tab through the Chrome DevTools Protocol and returns screenshots and page structure to the agent.
 - **Bridge server** — runs on the agent's computer. The extension connects to it outbound over a private channel (Tailscale), so nothing is exposed on your network. It routes commands and results, and keeps an audit log.
 - **The agent** — works the shared tab through the bridge with the same observe → act → verify loop it uses in its own browser.
 
@@ -58,7 +58,7 @@ npm start   # serves http://127.0.0.1:3031 (loopback-only)
 All checks (no Chrome needed):
 
 ```
-node --test extension/test/*.test.js bridge/test/*.test.js  # 62 unit tests
+node --test extension/test/*.test.js bridge/test/*.test.js  # 63 unit tests
 node tools/validate.js                                      # install readiness
 ```
 

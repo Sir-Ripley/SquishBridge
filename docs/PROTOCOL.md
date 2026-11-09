@@ -68,11 +68,11 @@ v0.4 extensions to older commands: `click` takes `{ button: left\|middle\|right,
 > `httpOnly` cookies, passwords, or passkeys, and the extension itself keeps
 > no credential-adjacent permission.
 
-## Sharing upgrades (v0.3)
+## Sharing upgrades (v0.3–v0.4)
 
-- **Share this site** (popup button, extension-local): allowlists the current
-  tab's origin if needed (with the usual host-grant prompt), designates the
-  tab, and starts the session — one click instead of add → share → start.
+- **Connect & Share** (popup button, extension-local, v0.4): one click that
+  connects the bridge socket, enables Open Mode, shares the current tab,
+  and starts the session. Pairing is the only step left outside the button.
 - **Open Mode** (popup toggle, off by default): skips the allowlist check so
   any `https://` non-denylisted origin can be shared with zero setup. The
   denylist, the https rule, the per-site banner grant, the banner/badge/STOP,
