@@ -119,3 +119,56 @@ test("no device connected -> 409; silent extension -> 408 timeout", async () => 
     ws.close();
   }
 });
+
+// ---- v0.6 P0 #3: Squish-link freshness ----
+
+async function getStatus() {
+  const res = await fetch(`http://127.0.0.1:${port}/v1/status`);
+  return { status: res.status, body: await res.json() };
+}
+
+test("trusted agent hits stamp last_command_at, visible in /v1/status", async () => {
+  const t0 = Date.now();
+  // 409 (no such device) still proves the agent reached us — it must stamp.
+  const res = await post("/v1/commands", { installId: "ghost-link", type: "get_state" });
+  assert.equal(res.status, 409);
+  const st = await getStatus();
+  assert.equal(st.status, 200);
+  assert.ok(st.body.last_command_at, "status carries last_command_at");
+  assert.ok(Date.parse(st.body.last_command_at) >= t0 - 1000, "stamp is fresh");
+});
+
+test("authed extension gets link status over the WS status message", async () => {
+  const ws = await fakeExtension("cmd-ext-status", () => {});
+  try {
+    const seen = new Promise((r) => ws.once("message", (d) => r(JSON.parse(String(d)))));
+    ws.send(JSON.stringify({ id: "st1", type: "status" }));
+    const msg = await seen;
+    assert.equal(msg.id, "st1");
+    assert.equal(msg.ok, true);
+    assert.match(msg.result.version, /^\d+\.\d+\.\d+/);
+    assert.ok(Date.parse(msg.result.now), "server now parses");
+    assert.ok("last_command_at" in msg.result, "link stamp present (null until first agent hit)");
+    assert.equal(typeof msg.result.pending_commands, "number");
+  } finally {
+    ws.close();
+  }
+});
+
+test("pre-auth status gets no reply (no info leak to scanners)", async () => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/v1/extension`);
+  await new Promise((r) => ws.on("open", r));
+  try {
+    const reply = await new Promise((resolve) => {
+      const t = setTimeout(() => resolve(null), 300);
+      ws.once("message", (d) => {
+        clearTimeout(t);
+        resolve(String(d));
+      });
+      ws.send(JSON.stringify({ id: "sneaky", type: "status" }));
+    });
+    assert.equal(reply, null);
+  } finally {
+    ws.close();
+  }
+});

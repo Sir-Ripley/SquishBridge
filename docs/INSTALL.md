@@ -52,6 +52,42 @@ boundary). Tighten with `SQUISH_BRIDGE_TRUST_TAILNET=0` (explicit
 `SQUISH_BRIDGE_TRUSTED_IPS` only) or `SQUISH_BRIDGE_HOST=127.0.0.1`
 (loopback only, agent locked out).
 
+Since v0.6 the server persists this in `bridge/bridge.config.json`
+(created with defaults on first boot; `npm start` uses it with zero env
+vars), and every startup verifies the bind against the real interfaces —
+a loopback-only bind on a tailnet machine prints a `WARNING` naming the
+fix instead of failing silently. Precedence: env vars > config file >
+defaults.
+
+## 4b. Autostart (so nobody runs commands by hand)
+
+The bridge should survive reboots and crashes with no terminal:
+
+- A **Startup shortcut** (`SquishBridge.lnk` in the Windows Startup folder)
+  runs `tools/bridge.ps1 start` at every logon.
+- A **watchdog task** (`SquishBridge-Watchdog`, every 15 min) re-runs the
+  same start, which is a no-op when the bridge is already healthy.
+
+Recreate them any time (no admin needed):
+
+```
+schtasks /Create /TN SquishBridge-Watchdog /TR "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File <repo>\tools\bridge.ps1 start" /SC MINUTE /MO 15 /F
+```
+
+plus a `SquishBridge.lnk` shortcut in
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` with the same
+target. Check health with `tools/bridge.ps1 status`
+(or `GET /health`); logs live in `bridge/bridge.log`.
+
+> **Agents, read this before telling Rodney to restart anything.** The ONLY
+> supported restart is `tools/bridge.ps1 restart` from the repo root (the
+> repo lives wherever Rodney cloned it — check `Get-Location`, never assume
+> `$HOME\SquishBridge`). Do NOT set `SQUISH_BRIDGE_HOST` to the tailnet IP:
+> that binds tailnet-only and breaks the loopback-paired extension. Do NOT
+> run bare `node server.js` in a terminal: it dies with the window and
+> bypasses the pidfile/health check. If probes get empty replies, the
+> server is down — check `bridge.ps1 status` first, not the firewall.
+
 ## 5. Pair (once per browser)
 
 1. Squish mints a one-time code: `POST /v1/pair/code` (10-minute life).
@@ -101,6 +137,8 @@ Two more v0.4 behaviors worth knowing:
 | Symptom | Cause → fix |
 |---|---|
 | Pair fails "cannot reach bridge" | Wrong address/port, or bridge not running → `tools/bridge.ps1 status`; start it if down. |
+| Agent probes time out / empty reply (curl rc=52) | Server is DOWN (nothing listening) → `tools/bridge.ps1 status`, then `start`. Do not re-pair and do not touch the firewall until the server answers `/health` locally. |
+| Popup says `bridge disconnected` while sharing | Socket down, session stale → start the server; the extension reconnects on its own (pairing survives restarts). If it says `Not paired`, ask Squish for a fresh code and re-pair. |
 | "port 3031 is busy" on start | A bridge is already running → `tools/bridge.ps1 stop` first, or set `SQUISH_BRIDGE_PORT`. |
 | Windows Firewall prompt for Node.js | First tailnet/LAN listen → Allow (private networks at least) or Squish can't dial in. |
 | Squish gets 403 from the bridge API | Its IP isn't trusted → it must dial from your tailnet (range `100.64.0.0/10` trusted by default); check `tailscale status`. |

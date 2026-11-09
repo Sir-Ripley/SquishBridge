@@ -29,6 +29,8 @@ let mem = {
   backoffAttempt: 0,
   reconnectTimer: null,
   driver: null, // CDP driver, created below once hooks exist (M2)
+  _pending: new Map(), // extension-initiated socket requests: id -> resolve
+  _link: { lastCommandAt: null, checkedAt: null }, // v0.6 P0 #3 second light
 };
 
 function sbUuid() {
@@ -154,6 +156,15 @@ function sbDropSocket() {
     clearTimeout(mem.reconnectTimer);
     mem.reconnectTimer = null;
   }
+  // Fail any extension-initiated request waiting on the dead socket.
+  for (const [, resolve] of mem._pending) {
+    try {
+      resolve({ ok: false, error: "socket dropped" });
+    } catch {
+      /* ignore */
+    }
+  }
+  mem._pending.clear();
   const ws = mem.socket;
   mem.socket = null;
   if (ws) {
@@ -175,7 +186,21 @@ async function sbOnSocketMessage(ev, pairing) {
   } catch {
     return;
   }
-  if (!msg || typeof msg.id !== "string" || typeof msg.type !== "string") return;
+  if (!msg || typeof msg.id !== "string") return;
+  // Typeless frames are replies to extension-initiated requests (v0.6
+  // "status"); route them to the waiter instead of the command path.
+  if (!msg.type) {
+    const resolve = mem._pending.get(msg.id);
+    if (resolve) {
+      mem._pending.delete(msg.id);
+      try {
+        resolve(msg);
+      } catch {
+        /* waiter is gone; nothing to do */
+      }
+    }
+    return;
+  }
   if (msg.type === "auth" || msg.type === "pair" || msg.type === "ping") return; // not commands
   // Bridge command (M2): execute against the shared tab and answer.
   let reply;
@@ -432,6 +457,50 @@ async function sbEnsureConnection() {
   return sbConnectSocket(pairing);
 }
 
+// v0.6 P0 #3: ask the server (over the authed socket — no host permission
+// needed) when the agent last reached it. Resolves to the server's reply
+// frame, or { ok:false } when there is no live socket / it times out.
+function sbServerStatus(timeoutMs) {
+  const ws = mem.socket;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return Promise.resolve({ ok: false, error: "bridge not connected" });
+  }
+  const id = sbUuid();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      mem._pending.delete(id);
+      resolve({ ok: false, error: "status timeout" });
+    }, timeoutMs || 8000);
+    mem._pending.set(id, (msg) => {
+      clearTimeout(timer);
+      resolve(msg);
+    });
+    try {
+      ws.send(JSON.stringify({ id, type: "status" }));
+    } catch {
+      clearTimeout(timer);
+      mem._pending.delete(id);
+      resolve({ ok: false, error: "socket send failed" });
+    }
+  });
+}
+
+// Best-effort refresh of the cached second light. Never throws.
+async function sbRefreshLink() {
+  try {
+    const st = await sbServerStatus();
+    if (st && st.ok && st.result) {
+      mem._link = {
+        lastCommandAt: st.result.last_command_at || null,
+        checkedAt: new Date().toISOString(),
+      };
+    }
+  } catch {
+    /* link stays cached; the popup shows its age */
+  }
+  return mem._link;
+}
+
 // ---- CDP driver wiring (logic lives in lib/cdp.js, tested under node) ----
 
 function sbDriver() {
@@ -628,6 +697,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sbGetPairing(),
           sbGetInstallId(),
         ]);
+        // Kick a link refresh without awaiting it: this popup shows the
+        // cached light, the next one shows the fresh stamp.
+        if (pairing && mem.socket) sbRefreshLink().catch(() => {});
         sendResponse({
           ok: true,
           version: SB_VERSION,
@@ -636,6 +708,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           allowlist,
           openMode,
           auditTail: auditLog.slice(-50),
+          link: { ...(mem._link || {}) },
           pairing: pairing
             ? { paired: true, installId: pairing.installId, bridgeUrl: pairing.bridgeUrl }
             : { paired: false, installId, bridgeUrl: "" },
@@ -835,6 +908,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await sbGetSession(); // rehydrate
     const pairing = await sbGetPairing();
     if (pairing && !mem.socket) sbEnsureConnection().catch(() => {});
+    if (pairing && mem.socket) sbRefreshLink().catch(() => {}); // second light
   }
 });
 

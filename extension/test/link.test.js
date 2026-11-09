@@ -34,3 +34,17 @@ test("auth envelope shape + ok detection", () => {
   assert.ok(link.sbIsAuthOk({ ok: true, result: {} }));
   assert.ok(!link.sbIsAuthOk({ ok: false, error: "x" }));
 });
+
+test("link age label: active seconds/minutes, silent minutes/hours, unknown", () => {
+  const now = Date.parse("2026-11-09T17:00:00.000Z");
+  const ago = (s) => new Date(now - s * 1000).toISOString();
+  assert.equal(link.sbLinkAgeLabel(now, ago(12)), "active 12s ago");
+  assert.equal(link.sbLinkAgeLabel(now, ago(89)), "active 89s ago");
+  assert.equal(link.sbLinkAgeLabel(now, ago(150)), "active 2m ago");
+  assert.equal(link.sbLinkAgeLabel(now, ago(22 * 60)), "silent 22m");
+  assert.equal(link.sbLinkAgeLabel(now, ago(3 * 3600)), "silent 3h");
+  assert.equal(link.sbLinkAgeLabel(now, null), "unknown");
+  assert.equal(link.sbLinkAgeLabel(now, undefined), "unknown");
+  assert.equal(link.sbLinkAgeLabel(now, "not-a-date"), "unknown");
+  assert.equal(link.sbLinkAgeLabel(now, ago(-30)), "active 0s ago"); // clock skew clamps
+});

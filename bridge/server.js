@@ -17,6 +17,7 @@ const { WebSocketServer } = require("ws");
 const audit = require("./lib/audit");
 const tokens = require("./lib/tokens");
 const pairing = require("./lib/pairing");
+const bridgeConfig = require("./lib/config");
 const { createRouter } = require("./lib/router");
 
 const VERSION = require("./package.json").version;
@@ -24,12 +25,18 @@ const VERSION = require("./package.json").version;
 // agent dials in over the tailnet, and one default must serve both. The
 // admin API stays gated by isTrusted below, so reachability is not access.
 // Lock down with SQUISH_BRIDGE_HOST=127.0.0.1 when the agent needs no entry.
+//
+// v0.6: the boot path (require.main) resolves host/port/trust from
+// bridge.config.json with env overrides (see lib/config.js) and assigns the
+// lets below. The library path (require, used by tests) keeps the plain
+// env-or-default behavior so it never touches the file.
 function resolveHost() {
   const h = (process.env.SQUISH_BRIDGE_HOST || "").trim();
   return h || "0.0.0.0";
 }
-const HOST = resolveHost();
-const PORT = Number(process.env.SQUISH_BRIDGE_PORT) || 3031;
+let HOST = resolveHost();
+let PORT = Number(process.env.SQUISH_BRIDGE_PORT) || 3031;
+let TRUST_TAILNET_OVERRIDE = null; // set by the boot path when the config file rules
 // Mutable so tests can point a server at a scratch log; production runs one
 // server per process, so this is never shared.
 let LOG_FILE = process.env.SQUISH_BRIDGE_AUDIT_LOG || audit.DEFAULT_LOG_FILE;
@@ -63,8 +70,20 @@ function normalizeAddr(addr) {
 }
 
 function tailnetTrustEnabled() {
+  if (TRUST_TAILNET_OVERRIDE !== null) return TRUST_TAILNET_OVERRIDE;
   const v = (process.env.SQUISH_BRIDGE_TRUST_TAILNET || "").trim().toLowerCase();
   return v !== "0" && v !== "false" && v !== "no";
+}
+
+// Boot-path only: apply the resolved file+env config to the module lets.
+function applyResolvedConfig(resolved) {
+  HOST = resolved.host;
+  PORT = resolved.port;
+  // Mutate in place: TRUSTED_SOURCES is a live export, so reassignment
+  // would leave require() holders looking at the stale set.
+  TRUSTED_SOURCES.clear();
+  for (const ip of resolved.trustedIps) TRUSTED_SOURCES.add(ip);
+  TRUST_TAILNET_OVERRIDE = resolved.trustTailnet;
 }
 
 function isTailnetAddr(addr) {
@@ -139,6 +158,15 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
   const devices = pairing.loadDevices(devicesFile);
   const sockets = new Map(); // installId -> ws
   const routers = new Map(); // installId -> router
+  // v0.6 P0 #3, second light: when did a trusted agent last reach us?
+  // Stamped on every trusted pair-code mint and command submission (any
+  // outcome — even a 4xx proves reachability). Served to trusted HTTP
+  // (/v1/status) and to the authed extension (WS "status"); deliberately
+  // NOT on public /health, which leaks no activity timing.
+  let lastCommandAt = null;
+  const touchAgent = () => {
+    lastCommandAt = new Date().toISOString();
+  };
 
   function routerFor(installId) {
     let r = routers.get(installId);
@@ -210,6 +238,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
             pendingCodes: pairing.pendingCount(store),
             pendingCommands: [...routers.values()].reduce((n, r) => n + r.pendingCount(), 0),
             addrs: lanAddrs(),
+            last_command_at: lastCommandAt,
           },
           origin
         );
@@ -218,6 +247,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
       // Trusted-only: mint a one-time pairing code (shown in chat).
       if (req.method === "POST" && pathname === "/v1/pair/code") {
         if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
+        touchAgent();
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         const ttlMs = body.ttlMinutes === undefined ? undefined : Number(body.ttlMinutes) * 60 * 1000;
@@ -256,6 +286,7 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
       // the HTTP response IS the command result.
       if (req.method === "POST" && pathname === "/v1/commands") {
         if (!isTrusted(req)) return sendJson(res, req, 403, { ok: false, error: "untrusted-source" }, origin);
+        touchAgent();
         const body = await readJson(req).catch(() => null);
         if (body === null) return sendJson(res, req, 400, { ok: false, error: "bad-json" }, origin);
         if (!body || typeof body.type !== "string" || !body.type) {
@@ -439,6 +470,27 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
           ws.send(JSON.stringify({ id: msg.id, ok: true, result: { pong: true } }));
           return;
         }
+        // v0.6 P0 #3: the paired extension asks (over its authed socket, so
+        // no host permission is needed) when the agent last reached us; the
+        // popup renders it as the second light ("Squish link: active 12s
+        // ago"). Authed-only: pre-auth callers get the same silent ignore
+        // as any other non-pair/auth message, so LAN scanners learn nothing.
+        if (msg.type === "status") {
+          const router = routers.get(authed.installId);
+          ws.send(
+            JSON.stringify({
+              id: msg.id,
+              ok: true,
+              result: {
+                version: VERSION,
+                now: new Date().toISOString(),
+                last_command_at: lastCommandAt,
+                pending_commands: router ? router.pendingCount() : 0,
+              },
+            })
+          );
+          return;
+        }
         audit.append(
           LOG_FILE,
           audit.entry("WS", `/v1/extension ${msg.type || "?"}`, 501, "", authed.installId)
@@ -487,6 +539,17 @@ function createServer({ devicesFile = DEVICES_FILE, auditLog = null } = {}) {
 }
 
 if (require.main === module) {
+  // v0.6 P0 #2: persisted config. First boot writes bridge.config.json with
+  // defaults; every boot resolves env > file > defaults, so a plain restart
+  // binds exactly like the last run with zero env vars.
+  const ensured = bridgeConfig.ensureConfigFile();
+  if (ensured.error) {
+    console.error(`WARNING: ${ensured.error} — falling back to defaults.`);
+  } else if (ensured.created) {
+    console.log(`config: created ${bridgeConfig.DEFAULT_CONFIG_FILE} with defaults (edit host/port/trust there).`);
+  }
+  const resolved = bridgeConfig.resolveConfig({ fileData: ensured.data });
+  applyResolvedConfig(resolved);
   const server = createServer();
   server.on("error", (err) => {
     if (err && err.code === "EADDRINUSE") {
@@ -510,6 +573,12 @@ if (require.main === module) {
     if (tailnetTrustEnabled()) trust.push("tailnet range 100.64.0.0/10");
     for (const ip of TRUSTED_SOURCES) trust.push(ip);
     console.log(`admin API trusts: ${trust.join(" + ")}`);
+    console.log(`config: host/port/trust from ${ensured.created ? "fresh defaults" : "bridge.config.json"} (env overrides apply)`);
+    // v0.6 P0 #2: verify the bind against the real interfaces. A silent
+    // loopback-only bind cost 30+ minutes on 2026-11-09 — never again.
+    for (const w of bridgeConfig.verifyBind(HOST, addrs, addrs.filter(isTailnetAddr))) {
+      console.log(`WARNING: ${w}`);
+    }
   });
 }
 

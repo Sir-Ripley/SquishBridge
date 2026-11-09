@@ -46,6 +46,20 @@ function sbIsAuthOk(msg) {
   return !!msg && msg.ok === true && !!msg.result;
 }
 
+// v0.6 P0 #3, second light: how fresh is the Squish link? nowMs is the
+// caller's clock, lastIso the server's last_command_at (or null when the
+// server has seen no agent hit yet / the status refresh hasn't landed).
+function sbLinkAgeLabel(nowMs, lastIso) {
+  if (!lastIso) return "unknown";
+  const t = Date.parse(lastIso);
+  if (Number.isNaN(t)) return "unknown";
+  const ageS = Math.max(0, Math.floor((Number(nowMs) - t) / 1000));
+  if (ageS < 90) return `active ${ageS}s ago`;
+  if (ageS < 300) return `active ${Math.floor(ageS / 60)}m ago`;
+  if (ageS < 3600) return `silent ${Math.floor(ageS / 60)}m`;
+  return `silent ${Math.floor(ageS / 3600)}h`;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     SB_WS_PATH,
@@ -54,5 +68,6 @@ if (typeof module !== "undefined" && module.exports) {
     sbSocketUrl,
     sbAuthMessage,
     sbIsAuthOk,
+    sbLinkAgeLabel,
   };
 }

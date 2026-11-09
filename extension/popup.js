@@ -17,11 +17,16 @@ function renderStatus(s) {
   const sess = s.session || {};
   const paired = !!(s.pairing && s.pairing.paired);
   const open = s.openMode === true ? " · Open Mode" : "";
+  // v0.6 P0 #3: both lights ALWAYS — the 2026-11-09 outage hid a dead socket
+  // behind "Active — driving tab" for hours. First light: this browser's
+  // socket to the server. Second: when Squish last reached the server.
+  const link = (s.link && s.link.lastCommandAt) || null;
+  const lights = `bridge ${s.socketState || "disconnected"} · Squish link ${sbLinkAgeLabel(Date.now(), link)}`;
   $("status").textContent = sess.active
-    ? `Active — driving tab ${sess.tabId}${open}`
+    ? `Active — driving tab ${sess.tabId}${open} · ${lights}`
     : paired
-      ? `Paired — bridge ${s.socketState || "disconnected"}${open}`
-      : "Not paired.";
+      ? `Paired${open} · ${lights}`
+      : `Not paired · ${lights}`;
   $("openMode").checked = s.openMode === true;
   $("sessionInfo").textContent = sess.active
     ? `Sharing tab ${sess.tabId} since ${sess.startedAt || "?"}. Banner is shown on the page.`
